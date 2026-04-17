@@ -6,6 +6,8 @@ import express from "express";
 import { WebSocketServer, WebSocket } from "ws";
 import twilio from "twilio";
 import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { buildPrompt, scenarios } from "./prompts.js";
 import { runMockCall } from "./mockCall.js";
@@ -19,6 +21,10 @@ const {
   TWILIO_FROM_NUMBER,
   PUBLIC_HOSTNAME,
   PORT = 5050,
+  // --- Inbound (Twilio number -> this app) ---
+  INBOUND_SCENARIO = "inbound",
+  INBOUND_USER_NAME = "the account holder",
+  INBOUND_LANGUAGE = "en",
 } = process.env;
 
 function realCallConfigured() {
@@ -43,10 +49,42 @@ function getTwilioClient() {
   }
   return twilioClient;
 }
+// ---------------------------------------------------------------------------
+// Inbound assistant config — persisted to ./inbound-config.json so the app
+// remembers the user's name/persona across restarts.
+// ---------------------------------------------------------------------------
+const INBOUND_CONFIG_PATH = path.resolve("./inbound-config.json");
+const DEFAULT_INBOUND_CONFIG = {
+  scenarioId: INBOUND_SCENARIO,
+  userName: INBOUND_USER_NAME,
+  language: INBOUND_LANGUAGE,
+  voice: "alloy",
+  persona: "",
+};
+let inboundConfig = { ...DEFAULT_INBOUND_CONFIG };
+try {
+  if (fs.existsSync(INBOUND_CONFIG_PATH)) {
+    const raw = JSON.parse(fs.readFileSync(INBOUND_CONFIG_PATH, "utf8"));
+    inboundConfig = { ...DEFAULT_INBOUND_CONFIG, ...raw };
+    console.log("Loaded inbound config:", INBOUND_CONFIG_PATH);
+  }
+} catch (e) {
+  console.error("Failed to read inbound-config.json:", e.message);
+}
+function saveInboundConfig() {
+  try {
+    fs.writeFileSync(INBOUND_CONFIG_PATH, JSON.stringify(inboundConfig, null, 2));
+  } catch (e) {
+    console.error("Failed to write inbound-config.json:", e.message);
+  }
+}
+
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static("public"));
+
+app.get("/inbound", (_req, res) => res.sendFile("inbound.html", { root: "public" }));
 
 /**
  * In-memory session registry.
@@ -84,6 +122,135 @@ function broadcastToUI(session, message) {
 // ---------------------------------------------------------------------------
 // REST endpoints
 // ---------------------------------------------------------------------------
+
+app.get("/api/inbound-config", (_req, res) => {
+  const host = PUBLIC_HOSTNAME ? PUBLIC_HOSTNAME.replace(/^https?:\/\//, "").replace(/\/$/, "") : null;
+  res.json({
+    ...inboundConfig,
+    webhookUrl: host ? `https://${host}/incoming-call` : null,
+    publicHostConfigured: !!host,
+  });
+});
+
+app.post("/api/inbound-config", (req, res) => {
+  const b = req.body || {};
+  const next = { ...inboundConfig };
+  if (typeof b.userName === "string") next.userName = b.userName.trim() || DEFAULT_INBOUND_CONFIG.userName;
+  if (typeof b.persona === "string") next.persona = b.persona;
+  if (typeof b.language === "string" && b.language) next.language = b.language;
+  if (typeof b.voice === "string" && b.voice) next.voice = b.voice;
+  if (typeof b.scenarioId === "string" && scenarios[b.scenarioId]) next.scenarioId = b.scenarioId;
+  inboundConfig = next;
+  saveInboundConfig();
+  res.json(inboundConfig);
+});
+
+/**
+ * Lightweight listing of recent sessions so the UI can show inbound calls.
+ * Optional query: ?type=inbound|outbound|mock
+ */
+app.get("/api/sessions", (req, res) => {
+  const type = req.query.type;
+  const list = [];
+  for (const [id, s] of sessions) {
+    if (type === "inbound" && !s.isInbound) continue;
+    if (type === "mock" && !s.isMock) continue;
+    if (type === "outbound" && (s.isInbound || s.isMock)) continue;
+    list.push({
+      sessionId: id,
+      scenarioId: s.scenarioId,
+      language: s.language,
+      startedAt: s.startedAt,
+      isInbound: !!s.isInbound,
+      isMock: !!s.isMock,
+      callSid: s.callSid,
+      closed: !!s.closed,
+      transcriptCount: s.transcript.length,
+      callerNumber: s.ctx?.callerNumber || null,
+      outcome: s.outcome?.outcome || null,
+    });
+  }
+  list.sort((a, b) => b.startedAt - a.startedAt);
+  res.json(list.slice(0, 50));
+});
+
+app.get("/api/languages", (_req, res) => {
+  res.json(
+    Object.entries(LANGUAGE_NAMES).map(([code, name]) => ({ code, name }))
+  );
+});
+
+/**
+ * Translate an existing call outcome into an arbitrary supported language.
+ * Caches per-session per-language so switching back is instant.
+ * Body: { language: "es" }
+ * Returns: { language, languageName, summary_native, next_steps_native }
+ */
+app.post("/api/sessions/:id/translate", async (req, res) => {
+  const s = sessions.get(req.params.id);
+  if (!s) return res.status(404).json({ error: "unknown session" });
+  if (!s.outcome) return res.status(409).json({ error: "no outcome yet" });
+  const lang = String(req.body?.language || "en");
+  if (!LANGUAGE_NAMES[lang]) return res.status(400).json({ error: "unsupported language" });
+  const langName = LANGUAGE_NAMES[lang];
+
+  s.outcomeTranslations = s.outcomeTranslations || {};
+
+  // Seed the cache with whatever the summary was originally produced in.
+  if (s.outcome.language && !s.outcomeTranslations[s.outcome.language]) {
+    s.outcomeTranslations[s.outcome.language] = {
+      language: s.outcome.language,
+      languageName: s.outcome.languageName || LANGUAGE_NAMES[s.outcome.language] || "English",
+      summary_native: s.outcome.summary_native || s.outcome.summary_en || "",
+      next_steps_native: s.outcome.next_steps_native?.length
+        ? s.outcome.next_steps_native
+        : (s.outcome.next_steps_en || []),
+    };
+  }
+  // Always have an English copy available.
+  if (!s.outcomeTranslations.en) {
+    s.outcomeTranslations.en = {
+      language: "en",
+      languageName: "English",
+      summary_native: s.outcome.summary_en || "",
+      next_steps_native: s.outcome.next_steps_en || [],
+    };
+  }
+
+  if (s.outcomeTranslations[lang]) return res.json(s.outcomeTranslations[lang]);
+
+  try {
+    const raw = await gpt([
+      {
+        role: "system",
+        content:
+          `Translate the provided call summary and next-steps into ${langName}. ` +
+          `Return strict JSON with keys "summary" (string) and "next_steps" (array of strings) — ` +
+          `both written entirely in ${langName}. No prose or markdown fences outside the JSON.`,
+      },
+      {
+        role: "user",
+        content:
+          `Summary (English):\n${s.outcome.summary_en || ""}\n\n` +
+          `Next steps (English):\n` +
+          (s.outcome.next_steps_en || []).map((x) => `- ${x}`).join("\n"),
+      },
+    ]);
+    const cleaned = raw.replace(/^```json\s*|\s*```$/g, "").trim();
+    const parsed = JSON.parse(cleaned);
+    const out = {
+      language: lang,
+      languageName: langName,
+      summary_native: parsed.summary || "",
+      next_steps_native: Array.isArray(parsed.next_steps) ? parsed.next_steps : [],
+    };
+    s.outcomeTranslations[lang] = out;
+    res.json(out);
+  } catch (e) {
+    console.error("translate outcome error:", e.message);
+    res.status(500).json({ error: "translate failed" });
+  }
+});
 
 app.get("/api/scenarios", (_req, res) => {
   res.json(
@@ -149,6 +316,68 @@ app.post("/api/call", async (req, res) => {
     res.status(500).json({ error: String(err.message || err) });
   }
 });
+
+/**
+ * Inbound call webhook. Configure in Twilio Console:
+ *   Phone Numbers -> Manage -> Active numbers -> your number ->
+ *   Voice Configuration -> "A call comes in" -> Webhook ->
+ *   https://<PUBLIC_HOSTNAME>/incoming-call  (HTTP POST)
+ *
+ * GET is also supported so you can sanity-check the URL in a browser.
+ */
+function handleIncomingCall(req, res) {
+  if (!PUBLIC_HOSTNAME || !OPENAI_API_KEY) {
+    res.type("text/xml");
+    return res.send(
+      `<?xml version="1.0" encoding="UTF-8"?><Response><Say>Server is not fully configured. Check OPENAI_API_KEY and PUBLIC_HOSTNAME.</Say></Response>`
+    );
+  }
+  const cfg = inboundConfig;
+  if (!scenarios[cfg.scenarioId]) {
+    console.error(`Incoming call: unknown scenarioId=${cfg.scenarioId}`);
+    res.type("text/xml");
+    return res.send(
+      `<?xml version="1.0" encoding="UTF-8"?><Response><Say>Inbound scenario is not configured.</Say></Response>`
+    );
+  }
+
+  const from = (req.body && req.body.From) || req.query.From || "unknown";
+  const to = (req.body && req.body.To) || req.query.To || "unknown";
+  const callSid = (req.body && req.body.CallSid) || req.query.CallSid || null;
+
+  const session = makeSession({
+    scenarioId: cfg.scenarioId,
+    language: cfg.language,
+    ctx: {
+      userName: cfg.userName,
+      persona: cfg.persona,
+      voice: cfg.voice,
+      callerNumber: from,
+      calledNumber: to,
+      purpose: "inbound call — take message or help caller",
+    },
+  });
+  session.isInbound = true;
+  session.callSid = callSid;
+  console.log(
+    `[${session.sessionId}] inbound call from ${from} -> ${to} (scenario=${cfg.scenarioId}, userName=${cfg.userName})`
+  );
+
+  const host = PUBLIC_HOSTNAME.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const streamUrl = `wss://${host}/media-stream`;
+  const statusUrl = `https://${host}/call-status?sessionId=${session.sessionId}`;
+  res.type("text/xml");
+  res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <Stream url="${streamUrl}" statusCallback="${statusUrl}">
+      <Parameter name="sessionId" value="${session.sessionId}" />
+    </Stream>
+  </Connect>
+</Response>`);
+}
+app.post("/incoming-call", handleIncomingCall);
+app.get("/incoming-call", handleIncomingCall);
 
 // Twilio fetches this when the call connects.
 app.post("/twiml", (req, res) => {
@@ -241,34 +470,54 @@ async function summarizeSession(session) {
   const transcriptText = session.transcript
     .map((t) => `${t.role === "agent" ? "Agent" : "Other party"}: ${t.text}`)
     .join("\n");
+  const lang = session.language || "en";
+  const langName = LANGUAGE_NAMES[lang] || "English";
+  const direction = session.isInbound ? "answered" : "placed";
+
   if (!transcriptText.trim()) {
-    session.outcome = { summary_en: "(no conversation captured)", summary_native: "", status: "empty" };
+    session.outcome = {
+      outcome: "empty",
+      summary_en: "(no conversation captured)",
+      summary_native: "",
+      language: lang,
+      languageName: langName,
+    };
     broadcastToUI(session, { type: "outcome", outcome: session.outcome });
     return;
   }
-  const langName = LANGUAGE_NAMES[session.language] || "Hindi";
   try {
     const raw = await gpt([
       {
         role: "system",
         content:
-          "You are an assistant that summarizes a phone call the agent placed on behalf of a user. " +
-          "Return a compact JSON object with keys: outcome (one of: commitment, partial, refused, unclear), " +
-          `summary_en (3-5 bullet sentences, plain text), summary_native (same summary translated to ${langName}), ` +
-          "next_steps_en (array of short strings), next_steps_native (same array translated), " +
-          "commitments (array of {what, when, who}). No prose outside the JSON.",
+          `You are an assistant that summarizes a phone call the agent ${direction} ` +
+          `on behalf of the user. Return a compact JSON object with keys: ` +
+          `outcome (one of: commitment, partial, refused, unclear), ` +
+          `summary_en (3-5 bullet sentences, plain text, English), ` +
+          `summary_native (the SAME summary written in ${langName}; if ${langName} is English, copy summary_en), ` +
+          `next_steps_en (array of short strings in English), ` +
+          `next_steps_native (same array written in ${langName}), ` +
+          `commitments (array of {what, when, who}). ` +
+          `The *_native fields MUST be in ${langName} only, never English unless ${langName} is English. ` +
+          `No prose outside the JSON, no markdown fences.`,
       },
       {
         role: "user",
         content: `Transcript:\n${transcriptText}`,
       },
     ]);
-    // Strip code fences if the model added any.
     const cleaned = raw.replace(/^```json\s*|\s*```$/g, "").trim();
-    session.outcome = JSON.parse(cleaned);
+    const parsed = JSON.parse(cleaned);
+    session.outcome = { ...parsed, language: lang, languageName: langName };
   } catch (e) {
     console.error("summarize parse error:", e.message);
-    session.outcome = { outcome: "unclear", summary_en: "Summary unavailable.", summary_native: "" };
+    session.outcome = {
+      outcome: "unclear",
+      summary_en: "Summary unavailable.",
+      summary_native: "",
+      language: lang,
+      languageName: langName,
+    };
   }
   broadcastToUI(session, { type: "outcome", outcome: session.outcome });
 }
@@ -345,9 +594,23 @@ function handleTwilioMediaSocket(twilioWs) {
   let assistantBuffer = ""; // accumulating text of current AI response
   let userBuffer = ""; // accumulating partial transcription of other party
 
-  function bootOpenAi() {
-    const { instructions, openingLine, voice } = buildPrompt(session.scenarioId, session.ctx || {});
-    console.log(`[${sessionId}] media-stream opened, scenario=${session.scenarioId}`);
+  async function bootOpenAi() {
+    const langName = LANGUAGE_NAMES[session.language] || "English";
+    const promptCtx = { ...(session.ctx || {}), languageName: langName };
+    const { instructions, voice } = buildPrompt(session.scenarioId, promptCtx);
+    let { openingLine } = buildPrompt(session.scenarioId, promptCtx);
+    console.log(`[${sessionId}] media-stream opened, scenario=${session.scenarioId}, lang=${langName}`);
+
+    // If the call's language isn't English, translate the seed greeting so the first words
+    // the caller hears are in the right language. Safe fallback on failure.
+    if (session.language && session.language !== "en" && openingLine) {
+      try {
+        const translated = await translateLine(openingLine, session.language);
+        if (translated) openingLine = translated;
+      } catch (e) {
+        console.error(`[${sessionId}] opening-line translate failed:`, e.message);
+      }
+    }
 
     openAiWs = new WebSocket(
       `wss://api.openai.com/v1/realtime?model=${OPENAI_REALTIME_MODEL}`,
@@ -512,6 +775,15 @@ function handleTwilioMediaSocket(twilioWs) {
   twilioWs.on("close", () => {
     console.log(`[${sessionId || "?"}] Twilio ws closed`);
     try { if (openAiWs) openAiWs.close(); } catch {}
+    if (session && !session.closed) {
+      session.closed = true;
+      broadcastToUI(session, { type: "call-status", status: "completed" });
+      // Inbound calls don't get a Twilio /call-status webhook the way /api/call does,
+      // so we generate the outcome here when the media stream goes away.
+      if (!session.outcome) {
+        summarizeSession(session).catch((e) => console.error("summarize (inbound) error:", e));
+      }
+    }
   });
   twilioWs.on("error", (e) => console.error(`[${sessionId}] Twilio ws error:`, e.message));
 }
@@ -537,10 +809,16 @@ async function pushTranscript(session, role, text) {
 }
 
 server.listen(PORT, () => {
-  console.log(`\nCrossCall server listening on http://localhost:${PORT}`);
+  console.log(`\nGiveMeVoice server listening on http://localhost:${PORT}`);
   if (realCallConfigured()) {
     console.log(`Public host (for Twilio + WSS):  ${PUBLIC_HOSTNAME}`);
     console.log(`Real outbound calls: enabled. Use ngrok (or similar) on port ${PORT}.`);
+    if (OPENAI_API_KEY && PUBLIC_HOSTNAME) {
+      console.log(
+        `Inbound calls: configure Twilio number voice webhook ->  https://${PUBLIC_HOSTNAME}/incoming-call  (HTTP POST)`
+      );
+      console.log(`Inbound scenario: ${INBOUND_SCENARIO} | user name: ${INBOUND_USER_NAME}`);
+    }
   } else {
     console.log(
       "Real outbound calls: disabled (set OPENAI_API_KEY, Twilio creds, TWILIO_FROM_NUMBER, PUBLIC_HOSTNAME)."

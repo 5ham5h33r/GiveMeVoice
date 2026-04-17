@@ -3,20 +3,24 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>CrossCall — makes the call for you</title>
+    <title>GiveMeVoice — makes the call for you</title>
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
     <header>
       <div class="brand">
-        <div class="logo">CC</div>
+        <div class="logo">GV</div>
         <div>
-          <h1>CrossCall</h1>
+          <h1>GiveMeVoice</h1>
           <p class="tagline">
             The phone call is the barrier. We make the call for you — in your language.
           </p>
         </div>
       </div>
+      <nav class="tabs">
+        <a href="/" class="tab active">Make a call</a>
+        <a href="/inbound" class="tab">Answer calls</a>
+      </nav>
       <div class="status" id="connStatus">idle</div>
     </header>
 
@@ -86,17 +90,22 @@
           <h3>Outcome</h3>
           <div class="outcome-pill" id="outcomeTag"></div>
           <div class="outcome-block">
-            <h4>Summary (your language)</h4>
+            <div class="outcome-lang">
+              <label for="outcomeLang">Show summary in:</label>
+              <select id="outcomeLang"></select>
+            </div>
+            <h4 id="summaryNativeHeader">Summary</h4>
             <p id="summaryNative"></p>
-            <h4>Summary (English)</h4>
+            <h4 id="summaryEnHeader">Summary (English)</h4>
             <p id="summaryEn"></p>
-            <h4>Next steps</h4>
+            <h4 id="nextStepsHeader">Next steps</h4>
             <ul id="nextSteps"></ul>
           </div>
         </div>
       </section>
     </main>
 
-    <script src="/app.js"></script>
+    <script src="/shared.js"></script>
+    <script src="/outbound.js"></script>
   </body>
 </html>

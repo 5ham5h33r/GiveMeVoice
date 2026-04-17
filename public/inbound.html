@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>GiveMeVoice — answers calls for you</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <div class="logo">GV</div>
+        <div>
+          <h1>GiveMeVoice</h1>
+          <p class="tagline">Give your number a voice. Let it take your calls.</p>
+        </div>
+      </div>
+      <nav class="tabs">
+        <a href="/" class="tab">Make a call</a>
+        <a href="/inbound" class="tab active">Answer calls</a>
+      </nav>
+      <div class="status" id="connStatus">idle</div>
+    </header>
+
+    <main>
+      <!-- LEFT: inbound assistant config + recent call list -->
+      <section class="panel setup" id="inboundPanel">
+        <h2>Inbound assistant</h2>
+        <p class="fineprint" style="margin-top:0">
+          Configure the assistant that <strong>answers</strong> your Twilio number.
+          Saved locally — takes effect on the next inbound call, no restart.
+        </p>
+        <div class="grid">
+          <label class="wide">Your name (who the assistant represents)
+            <input id="inUserName" placeholder="e.g. Shamsheer" />
+          </label>
+          <label>Language
+            <select id="inLanguage">
+              <option value="en">English</option>
+              <option value="hi">Hindi (हिन्दी)</option>
+              <option value="es">Spanish (Español)</option>
+              <option value="zh">Mandarin (中文)</option>
+              <option value="vi">Vietnamese (Tiếng Việt)</option>
+              <option value="ar">Arabic (العربية)</option>
+              <option value="tl">Tagalog</option>
+            </select>
+          </label>
+          <label>Voice
+            <select id="inVoice">
+              <option value="alloy">alloy (neutral)</option>
+              <option value="ash">ash</option>
+              <option value="ballad">ballad</option>
+              <option value="coral">coral</option>
+              <option value="echo">echo</option>
+              <option value="sage">sage</option>
+              <option value="shimmer">shimmer</option>
+              <option value="verse">verse</option>
+            </select>
+          </label>
+          <label class="wide">Persona &amp; custom instructions
+            <textarea id="inPersona" rows="5" placeholder="e.g. Sound warm and professional. Always ask for callback number and a good time. Prefer callbacks between 3–6 PM PT. Politely decline sales calls and end them."></textarea>
+          </label>
+        </div>
+
+        <button id="inSaveBtn" class="primary">Save inbound assistant</button>
+
+        <h2 style="margin-top:24px">Recent inbound calls
+          <button type="button" id="inRefreshBtn" class="inline-refresh">Refresh</button>
+        </h2>
+        <div id="inboundList" class="inbound-list"></div>
+      </section>
+
+      <!-- RIGHT: live transcript + outcome for whichever call is selected -->
+      <section class="panel live" id="livePanel">
+        <div class="live-header">
+          <h2>Selected call</h2>
+          <span id="callStatus" class="pill">none</span>
+        </div>
+        <div id="transcript" class="transcript"></div>
+        <div id="outcome" class="outcome hidden">
+          <h3>Outcome</h3>
+          <div class="outcome-pill" id="outcomeTag"></div>
+          <div class="outcome-block">
+            <div class="outcome-lang">
+              <label for="outcomeLang">Show summary in:</label>
+              <select id="outcomeLang"></select>
+            </div>
+            <h4 id="summaryNativeHeader">Summary</h4>
+            <p id="summaryNative"></p>
+            <h4 id="summaryEnHeader">Summary (English)</h4>
+            <p id="summaryEn"></p>
+            <h4 id="nextStepsHeader">Next steps</h4>
+            <ul id="nextSteps"></ul>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/shared.js"></script>
+    <script src="/inbound.js"></script>
+  </body>
+</html>
