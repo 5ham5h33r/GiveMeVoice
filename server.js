@@ -158,12 +158,16 @@ app.post("/twiml", (req, res) => {
   }
   const sessionId = req.query.sessionId;
   const host = PUBLIC_HOSTNAME.replace(/^https?:\/\//, "").replace(/\/$/, "");
-  const streamUrl = `wss://${host}/media-stream?sessionId=${sessionId}`;
+  // Twilio <Stream> strips query-string args from the url — must use <Parameter> for the sessionId.
+  // https://www.twilio.com/docs/voice/twiml/stream#custom-parameters
+  const streamUrl = `wss://${host}/media-stream`;
   res.type("text/xml");
   res.send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${streamUrl}" />
+    <Stream url="${streamUrl}">
+      <Parameter name="sessionId" value="${sessionId}" />
+    </Stream>
   </Connect>
 </Response>`);
 });
@@ -318,44 +322,57 @@ function handleUISocket(ws) {
 
 // --- Twilio media stream socket: bridges to OpenAI Realtime ---
 function handleTwilioMediaSocket(twilioWs) {
-  const sessionId = twilioWs.crossCallSessionId;
-  const session = sessions.get(sessionId);
-  if (!session) {
-    console.error("media-stream: unknown sessionId", sessionId);
-    twilioWs.close();
-    return;
-  }
+  // sessionId arrives from Twilio's <Parameter> in the `start` event — NOT the URL query
+  // (Twilio strips query params from <Stream url>). We lazily init once `start` lands.
+  // See: https://www.twilio.com/docs/voice/twiml/stream#custom-parameters
   if (!OPENAI_API_KEY) {
     console.error("media-stream: OPENAI_API_KEY missing");
     twilioWs.close();
     return;
   }
 
-  const { instructions, openingLine, voice } = buildPrompt(session.scenarioId, session.ctx || {});
-  console.log(`[${sessionId}] media-stream opened, scenario=${session.scenarioId}`);
-
-  // Open OpenAI Realtime websocket.
-  const openAiWs = new WebSocket(
-    `wss://api.openai.com/v1/realtime?model=${OPENAI_REALTIME_MODEL}`,
-    {
-      headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-        "OpenAI-Beta": "realtime=v1",
-      },
-    }
-  );
-
+  let sessionId = null;
+  let session = null;
+  let openAiWs = null;
   let streamSid = null;
+  /** When Twilio reports DTMF (e.g. trial "press any key"), OpenAI server_vad often fires
+   * `speech_started` on the tone. Sending `clear` to Twilio right then wipes outbound audio
+   * and can make the call drop or sound like an immediate hang-up. */
+  let lastInboundDtmfAt = 0;
+  let twilioStreamStartedAt = 0;
+  const BARGE_IN_CLEAR_IGNORE_MS = 1800;
+
   let assistantBuffer = ""; // accumulating text of current AI response
   let userBuffer = ""; // accumulating partial transcription of other party
 
-  openAiWs.on("open", () => {
+  function bootOpenAi() {
+    const { instructions, openingLine, voice } = buildPrompt(session.scenarioId, session.ctx || {});
+    console.log(`[${sessionId}] media-stream opened, scenario=${session.scenarioId}`);
+
+    openAiWs = new WebSocket(
+      `wss://api.openai.com/v1/realtime?model=${OPENAI_REALTIME_MODEL}`,
+      {
+        headers: {
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
+          "OpenAI-Beta": "realtime=v1",
+        },
+      }
+    );
+
+    openAiWs.on("open", () => onOpenAiOpen(instructions, openingLine, voice));
+    openAiWs.on("message", onOpenAiMessage);
+    openAiWs.on("close", () => console.log(`[${sessionId}] OpenAI closed`));
+    openAiWs.on("error", (e) => console.error(`[${sessionId}] OpenAI error:`, e.message));
+  }
+
+  function onOpenAiOpen(instructions, openingLine, voice) {
     console.log(`[${sessionId}] OpenAI Realtime connected`);
     openAiWs.send(
       JSON.stringify({
         type: "session.update",
         session: {
-          turn_detection: { type: "server_vad", threshold: 0.5, silence_duration_ms: 600 },
+          // Slightly less sensitive VAD reduces false "speech" on DTMF / line noise (e.g. trial keypress).
+          turn_detection: { type: "server_vad", threshold: 0.62, silence_duration_ms: 650 },
           input_audio_format: "g711_ulaw",
           output_audio_format: "g711_ulaw",
           voice: voice || "alloy",
@@ -378,15 +395,14 @@ function handleTwilioMediaSocket(twilioWs) {
       })
     );
     openAiWs.send(JSON.stringify({ type: "response.create" }));
-  });
+  }
 
-  openAiWs.on("message", async (raw) => {
+  async function onOpenAiMessage(raw) {
     let evt;
     try { evt = JSON.parse(raw.toString()); } catch { return; }
 
     switch (evt.type) {
       case "response.audio.delta": {
-        // Pass audio back to Twilio as outbound media.
         if (streamSid && evt.delta) {
           twilioWs.send(
             JSON.stringify({
@@ -406,19 +422,29 @@ function handleTwilioMediaSocket(twilioWs) {
       case "response.done": {
         const text = assistantBuffer.trim();
         assistantBuffer = "";
-        if (text) await pushTranscript(session, "agent", text);
+        if (text && session) await pushTranscript(session, "agent", text);
         break;
       }
       case "conversation.item.input_audio_transcription.completed": {
         const text = (evt.transcript || "").trim();
-        if (text) await pushTranscript(session, "counterparty", text);
+        if (text && session) await pushTranscript(session, "counterparty", text);
         break;
       }
       case "input_audio_buffer.speech_started": {
-        // Barge-in: user started talking. Clear any queued AI audio to Twilio.
-        if (streamSid) {
-          twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
+        if (!streamSid) break;
+        const msSinceDtmf = Date.now() - lastInboundDtmfAt;
+        if (lastInboundDtmfAt && msSinceDtmf < BARGE_IN_CLEAR_IGNORE_MS) {
+          console.log(
+            `[${sessionId}] skip barge-in clear (${msSinceDtmf}ms after DTMF — likely trial keypress tone)`
+          );
+          break;
         }
+        const msSinceTwilioStart = twilioStreamStartedAt ? Date.now() - twilioStreamStartedAt : Infinity;
+        if (twilioStreamStartedAt && msSinceTwilioStart < 120) {
+          console.log(`[${sessionId}] skip barge-in clear (${msSinceTwilioStart}ms after Twilio start — ordering)`);
+          break;
+        }
+        twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
         break;
       }
       case "error": {
@@ -428,21 +454,43 @@ function handleTwilioMediaSocket(twilioWs) {
       default:
         break;
     }
-  });
-
-  openAiWs.on("close", () => console.log(`[${sessionId}] OpenAI closed`));
-  openAiWs.on("error", (e) => console.error(`[${sessionId}] OpenAI error:`, e.message));
+  }
 
   twilioWs.on("message", (raw) => {
     let data;
     try { data = JSON.parse(raw.toString()); } catch { return; }
     switch (data.event) {
-      case "start":
+      case "connected":
+        console.log(`media-stream: Twilio connected`);
+        break;
+      case "start": {
         streamSid = data.start.streamSid;
+        twilioStreamStartedAt = Date.now();
+        // Twilio sends custom <Parameter> values here.
+        const params = data.start.customParameters || {};
+        const incomingSessionId = params.sessionId || params.sessionid || null;
+        if (!incomingSessionId) {
+          console.error(`media-stream: start with no sessionId param — closing. start=`, JSON.stringify(data.start));
+          try { twilioWs.close(); } catch {}
+          return;
+        }
+        sessionId = incomingSessionId;
+        session = sessions.get(sessionId);
+        if (!session) {
+          console.error(`media-stream: unknown sessionId ${sessionId} — closing`);
+          try { twilioWs.close(); } catch {}
+          return;
+        }
         console.log(`[${sessionId}] Twilio stream started ${streamSid}`);
+        bootOpenAi();
+        break;
+      }
+      case "dtmf":
+        lastInboundDtmfAt = Date.now();
+        console.log(`[${sessionId}] Twilio DTMF digit=${data.dtmf?.digit ?? "?"}`);
         break;
       case "media":
-        if (openAiWs.readyState === WebSocket.OPEN) {
+        if (openAiWs && openAiWs.readyState === WebSocket.OPEN) {
           openAiWs.send(
             JSON.stringify({
               type: "input_audio_buffer.append",
@@ -453,7 +501,7 @@ function handleTwilioMediaSocket(twilioWs) {
         break;
       case "stop":
         console.log(`[${sessionId}] Twilio stream stopped`);
-        try { openAiWs.close(); } catch {}
+        try { if (openAiWs) openAiWs.close(); } catch {}
         try { twilioWs.close(); } catch {}
         break;
       default:
@@ -462,8 +510,8 @@ function handleTwilioMediaSocket(twilioWs) {
   });
 
   twilioWs.on("close", () => {
-    console.log(`[${sessionId}] Twilio ws closed`);
-    try { openAiWs.close(); } catch {}
+    console.log(`[${sessionId || "?"}] Twilio ws closed`);
+    try { if (openAiWs) openAiWs.close(); } catch {}
   });
   twilioWs.on("error", (e) => console.error(`[${sessionId}] Twilio ws error:`, e.message));
 }
