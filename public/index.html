@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>CrossCall — makes the call for you</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <div class="logo">CC</div>
+        <div>
+          <h1>CrossCall</h1>
+          <p class="tagline">
+            The phone call is the barrier. We make the call for you — in your language.
+          </p>
+        </div>
+      </div>
+      <div class="status" id="connStatus">idle</div>
+    </header>
+
+    <main>
+      <!-- LEFT: setup form -->
+      <section class="panel setup" id="setupPanel">
+        <h2>1. What do you need help with?</h2>
+        <div class="scenarios" id="scenarios"><!-- filled by JS --></div>
+
+        <h2>2. Your details</h2>
+        <div class="grid">
+          <label>Your name
+            <input id="userName" placeholder="e.g. Priya Sharma" />
+          </label>
+          <label>Your language
+            <select id="language">
+              <option value="hi">Hindi (हिन्दी)</option>
+              <option value="es">Spanish (Español)</option>
+              <option value="zh">Mandarin (中文)</option>
+              <option value="vi">Vietnamese (Tiếng Việt)</option>
+              <option value="ar">Arabic (العربية)</option>
+              <option value="tl">Tagalog</option>
+              <option value="en">English</option>
+            </select>
+          </label>
+          <label>Their name / company
+            <input id="counterpartyName" placeholder="e.g. Sunset Properties" />
+          </label>
+          <label>Their phone number
+            <input id="to" placeholder="+1310..." />
+          </label>
+          <label class="wide">Address / service location
+            <input id="address" placeholder="e.g. 123 W 27th St, Los Angeles, CA" />
+          </label>
+          <label class="wide">Describe the issue
+            <textarea id="issue" rows="3" placeholder="e.g. Heater has been broken for 9 days, bedroom reaches 54°F at night"></textarea>
+          </label>
+          <label>How long?
+            <input id="duration" placeholder="e.g. 9 days" />
+          </label>
+          <label>Prior notice given?
+            <input id="priorNotice" placeholder="e.g. texted manager Apr 8" />
+          </label>
+          <label>Your callback number
+            <input id="userCallbackNumber" placeholder="+1..." />
+          </label>
+        </div>
+
+        <button id="callBtn" class="primary">Make the call on my behalf</button>
+        <button type="button" id="mockBtn" class="secondary">Run mock call (free — no phone, no APIs)</button>
+
+        <p class="fineprint">
+          This assistant acts on your behalf and under your direction. It is
+          not a lawyer and does not give legal advice. Real calls are recorded
+          for your records. Mock calls are simulated locally for testing only.
+        </p>
+      </section>
+
+      <!-- RIGHT: live call + transcript -->
+      <section class="panel live" id="livePanel">
+        <div class="live-header">
+          <h2>Live call</h2>
+          <span id="callStatus" class="pill">not started</span>
+        </div>
+        <div id="transcript" class="transcript"></div>
+        <div id="outcome" class="outcome hidden">
+          <h3>Outcome</h3>
+          <div class="outcome-pill" id="outcomeTag"></div>
+          <div class="outcome-block">
+            <h4>Summary (your language)</h4>
+            <p id="summaryNative"></p>
+            <h4>Summary (English)</h4>
+            <p id="summaryEn"></p>
+            <h4>Next steps</h4>
+            <ul id="nextSteps"></ul>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,25 @@
+{
+  "name": "crosscall",
+  "version": "0.1.0",
+  "description": "CrossCall — agentic voice-first navigator that makes phone calls on your behalf in your language.",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": [
+    "twilio",
+    "openai",
+    "realtime",
+    "voice-agent",
+    "accessibility"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1",
+    "twilio": "^5.3.5",
+    "ws": "^8.18.0"
+  }
+}
