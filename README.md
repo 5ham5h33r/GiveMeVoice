@@ -1,11 +1,11 @@
-# CrossCall
+# GiveMeVoice
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org/)
 
-**Voice-first agent that places real phone calls on behalf of a user**—in the callee’s language for the call, with a **live transcript** and **summary in the user’s language** (e.g. Hindi). Built with **Twilio** (PSTN + Media Streams) and **OpenAI Realtime** (speech-to-speech), plus a small **Express** server and browser UI.
+**Voice-first agent that places and answers real phone calls on behalf of a user**—in the callee’s language for the call, with a **live transcript** and **summary in the user’s language** (e.g. Hindi). Built with **Twilio** (PSTN + Media Streams) and **OpenAI Realtime** (speech-to-speech), plus a small **Express** server and browser UI.
 
-> The phone call is the barrier. CrossCall is the follow-through: dial, negotiate, record, summarize.
+> The phone call is the barrier. GiveMeVoice is the follow-through: dial, negotiate, answer, record, summarize.
 
 ## Table of contents
 
@@ -28,10 +28,11 @@
 
 ## Features
 
-- **Outbound calls** via Twilio; **real-time voice** via OpenAI Realtime bridged over μ-law audio.
+- **Outbound & Inbound calls** via Twilio; **real-time voice** via OpenAI Realtime bridged over μ-law audio.
+- **Inbound Persona Options**: The agent can act on your behalf to answer calls, speak in a custom designated language, and operate under personalized instructions.
 - **Live UI**: transcript, optional line-by-line translation, post-call **outcome** JSON (commitment / partial / refused / unclear + next steps).
 - **Mock mode**: full UI rehearsal with **no** Twilio, OpenAI, or tunnel—canned dialogue and outcome.
-- **Scenarios** (prompted flows): landlord habitability (CA §1941.1 framing), utility hardship, wage-claim intake info, school records—see `prompts.js`.
+- **Scenarios** (prompted flows): landlord habitability (CA §1941.1 framing), utility hardship, wage-claim intake info, school records, and inbound message taking—see `prompts.js`.
 - Agent framed as **acting on the user’s behalf**; disclaims **legal advice**; identifies as an assistant when asked.
 
 ## Stack
@@ -53,8 +54,8 @@
 ## Quick start
 
 ```bash
-git clone https://github.com/<your-username>/crosscall.git
-cd crosscall
+git clone https://github.com/5ham5h33r/GiveMeVoice.git
+cd GiveMeVoice
 npm install
 npm start
 ```
@@ -127,6 +128,7 @@ Browser (form + live transcript)
         ▼
 Node (Express + ws)
   POST /api/call     → Twilio REST outbound call
+  POST /incoming-call→ Twilio webhook for inbound calls
   POST /twiml        → <Connect><Stream> → WSS /media-stream
   WSS /media-stream  → audio ↔ OpenAI Realtime (g711_ulaw)
   POST /call-status  → Twilio status → optional summary job
@@ -138,10 +140,12 @@ Audio is **8 kHz μ-law** end-to-end through Realtime; the server forwards base6
 
 | Method / protocol | Path | Purpose |
 |-------------------|------|---------|
-| `GET` | `/` | Static UI (`public/`) |
+| `GET` | `/` | Static UI (`public/index.html`) for outbound calls |
+| `GET` | `/inbound` | Static UI (`public/inbound.html`) for configuring inbound calls |
 | `GET` | `/api/scenarios` | JSON list of scenario ids |
-| `POST` | `/api/call` | Start **real** call (requires full `.env`) |
+| `POST` | `/api/call` | Start **real** outbound call (requires full `.env`) |
 | `POST` | `/api/call/mock` | Start **mock** session (no Twilio/OpenAI) |
+| `POST` | `/incoming-call` | Twilio Voice webhook for inbound calls |
 | `POST` | `/twiml` | Twilio Voice webhook (TwiML) |
 | `POST` | `/call-status` | Twilio status callback |
 | `WS` | `/ui?sessionId=` | Browser transcript + outcome stream |
@@ -181,9 +185,10 @@ Rough rule: several **short** real tests are often **under a few dollars** on Op
 | Path | Role |
 |------|------|
 | `server.js` | Express app, Twilio + OpenAI Realtime bridge, UI WebSocket |
+| `inbound-config.json` | Configured inbound settings (language, persona) |
 | `mockCall.js` | Scripted mock conversation + outcome |
 | `prompts.js` | Scenario system prompts |
-| `public/` | Static UI (`index.html`, `app.js`, `style.css`) |
+| `public/` | Static UI (`index.html`, `inbound.html`, `outbound.js`, `inbound.js`, `shared.js`, `style.css`) |
 | `.env.example` | Environment template |
 
 ## Background
