@@ -4,50 +4,83 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>GiveMeVoice — answers calls for you</title>
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("gmv-ui-theme");
+          var theme = stored || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+          document.documentElement.setAttribute("data-theme", theme);
+        } catch (e) {}
+      })();
+    </script>
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
     <header>
       <div class="brand">
-        <div class="logo">GV</div>
+        <div class="logo" aria-label="GiveMeVoice">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 16.5v2.5a2 2 0 0 1-2.18 2 19.5 19.5 0 0 1-8.5-3.05 19 19 0 0 1-6-6A19.5 19.5 0 0 1 1.27 3.45 2 2 0 0 1 3.27 1.5h2.5a2 2 0 0 1 2 1.72 12 12 0 0 0 .65 2.6 2 2 0 0 1-.45 2.1L6.5 9.4a16 16 0 0 0 6 6l1.48-1.47a2 2 0 0 1 2.1-.45 12 12 0 0 0 2.6.65 2 2 0 0 1 1.72 2z"/>
+          </svg>
+        </div>
         <div>
           <h1>GiveMeVoice</h1>
-          <p class="tagline">Give your number a voice. Let it take your calls.</p>
+          <p class="tagline" data-i18n>Give your number a voice. Let it take your calls.</p>
         </div>
       </div>
       <nav class="tabs">
-        <a href="/" class="tab">Make a call</a>
-        <a href="/inbound" class="tab active">Answer calls</a>
+        <a href="/" class="tab" data-i18n>Make a call</a>
+        <a href="/inbound" class="tab active" data-tab="inbound"><span data-i18n>Answer calls</span><span class="tab-badge zero" id="inboundLiveBadge" aria-label="Live inbound calls">0</span></a>
       </nav>
-      <div class="status" id="connStatus">idle</div>
+      <div class="header-right">
+        <div class="lang-control" title="Page language" data-i18n-title>
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9"></circle>
+            <path d="M3 12h18"></path>
+            <path d="M12 3a14 14 0 0 1 0 18"></path>
+            <path d="M12 3a14 14 0 0 0 0 18"></path>
+          </svg>
+          <select id="siteLang" class="lang-switch" data-i18n-aria aria-label="Page language"></select>
+        </div>
+        <button type="button" class="theme-toggle" aria-label="Switch to dark theme (Shift+T)" title="Switch theme (Shift+T)" data-i18n-title aria-pressed="false">
+          <svg class="icon icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          </svg>
+          <svg class="icon icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="4"/>
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+          </svg>
+        </button>
+        <div class="status" id="connStatus" data-status="idle" data-i18n>idle</div>
+      </div>
     </header>
 
     <main>
       <!-- LEFT: inbound assistant config + recent call list -->
       <section class="panel setup" id="inboundPanel">
-        <h2>Inbound assistant</h2>
-        <p class="fineprint" style="margin-top:0">
-          Configure the assistant that <strong>answers</strong> your Twilio number.
+        <h2 data-i18n>Inbound assistant</h2>
+        <p class="fineprint" style="margin-top:0" data-i18n>
+          Configure the assistant that answers your Twilio number.
           Saved locally — takes effect on the next inbound call, no restart.
         </p>
         <div class="grid">
-          <label class="wide">Your name (who the assistant represents)
-            <input id="inUserName" placeholder="e.g. Shamsheer" />
+          <label class="wide" data-i18n>Your name (who the assistant represents)
+            <input id="inUserName" data-i18n-placeholder placeholder="e.g. Shamsheer" />
           </label>
-          <label>Language
+          <label data-i18n>Language
             <select id="inLanguage">
-              <option value="en">English</option>
-              <option value="hi">Hindi (हिन्दी)</option>
-              <option value="es">Spanish (Español)</option>
-              <option value="zh">Mandarin (中文)</option>
-              <option value="vi">Vietnamese (Tiếng Việt)</option>
-              <option value="ar">Arabic (العربية)</option>
-              <option value="tl">Tagalog</option>
+              <option value="en" data-i18n>English</option>
+              <option value="hi" data-i18n>Hindi (हिन्दी)</option>
+              <option value="es" data-i18n>Spanish (Español)</option>
+              <option value="zh" data-i18n>Mandarin (中文)</option>
+              <option value="vi" data-i18n>Vietnamese (Tiếng Việt)</option>
+              <option value="ar" data-i18n>Arabic (العربية)</option>
+              <option value="tl" data-i18n>Tagalog</option>
             </select>
           </label>
-          <label>Voice
+          <label data-i18n>Voice
             <select id="inVoice">
-              <option value="alloy">alloy (neutral)</option>
+              <option value="alloy" data-i18n>alloy (neutral)</option>
               <option value="ash">ash</option>
               <option value="ballad">ballad</option>
               <option value="coral">coral</option>
@@ -57,45 +90,88 @@
               <option value="verse">verse</option>
             </select>
           </label>
-          <label class="wide">Persona &amp; custom instructions
-            <textarea id="inPersona" rows="5" placeholder="e.g. Sound warm and professional. Always ask for callback number and a good time. Prefer callbacks between 3–6 PM PT. Politely decline sales calls and end them."></textarea>
+          <label class="wide" data-i18n>Persona &amp; custom instructions
+            <textarea id="inPersona" rows="5" data-i18n-placeholder placeholder="e.g. Sound warm and professional. Always ask for callback number and a good time. Prefer callbacks between 3–6 PM PT. Politely decline sales calls and end them."></textarea>
           </label>
         </div>
 
-        <button id="inSaveBtn" class="primary">Save inbound assistant</button>
+        <button id="inSaveBtn" class="primary" data-i18n>Save inbound assistant</button>
 
-        <h2 style="margin-top:24px">Recent inbound calls
-          <button type="button" id="inRefreshBtn" class="inline-refresh">Refresh</button>
+        <h2 style="margin-top:24px"><span data-i18n>Recent inbound calls</span>
+          <button type="button" id="inRefreshBtn" class="inline-refresh" data-i18n>Refresh</button>
         </h2>
+        <div class="inbound-filters" id="inboundFilters" role="tablist" aria-label="Filter calls">
+          <button type="button" class="filter-pill active" data-filter="all" data-i18n>All</button>
+          <button type="button" class="filter-pill" data-filter="live" data-i18n>Live only</button>
+          <button type="button" class="filter-pill" data-filter="today" data-i18n>Today</button>
+          <button type="button" class="filter-pill" data-filter="week" data-i18n>This week</button>
+        </div>
         <div id="inboundList" class="inbound-list"></div>
       </section>
 
       <!-- RIGHT: live transcript + outcome for whichever call is selected -->
       <section class="panel live" id="livePanel">
         <div class="live-header">
-          <h2>Selected call</h2>
-          <span id="callStatus" class="pill">none</span>
+          <h2 data-i18n>Selected call</h2>
+          <span id="callStatus" class="pill" data-i18n>none</span>
         </div>
-        <div id="transcript" class="transcript"></div>
+
         <div id="outcome" class="outcome hidden">
-          <h3>Outcome</h3>
-          <div class="outcome-pill" id="outcomeTag"></div>
+          <div class="outcome-header">
+            <h3 data-i18n>Outcome</h3>
+            <div class="outcome-pill" id="outcomeTag"></div>
+            <div class="outcome-actions">
+              <button type="button" class="outcome-action-btn" id="copyOutcomeBtn" title="Copy summary to clipboard" data-i18n-title>
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
+                <span data-i18n>Copy</span>
+              </button>
+              <button type="button" class="outcome-action-btn" id="emailOutcomeBtn" title="Email summary" data-i18n-title>
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+                  <polyline points="22,6 12,13 2,6"/>
+                </svg>
+                <span data-i18n>Email</span>
+              </button>
+            </div>
+          </div>
           <div class="outcome-block">
             <div class="outcome-lang">
-              <label for="outcomeLang">Show summary in:</label>
+              <label for="outcomeLang" data-i18n>Show summary in:</label>
               <select id="outcomeLang"></select>
             </div>
-            <h4 id="summaryNativeHeader">Summary</h4>
+            <h4 id="summaryNativeHeader" data-i18n>Summary</h4>
             <p id="summaryNative"></p>
-            <h4 id="summaryEnHeader">Summary (English)</h4>
+            <h4 id="summaryEnHeader" data-i18n>Summary (English)</h4>
             <p id="summaryEn"></p>
-            <h4 id="nextStepsHeader">Next steps</h4>
+            <h4 id="nextStepsHeader" data-i18n>Next steps</h4>
             <ul id="nextSteps"></ul>
           </div>
+        </div>
+
+        <div id="transcript" class="transcript">
+          <div class="transcript-empty" id="transcriptEmpty">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+            <p data-i18n>Pick a call from the list — its live transcript and summary will appear here.</p>
+          </div>
+          <button type="button" class="scroll-bottom-btn" id="scrollBottomBtn" aria-label="Scroll to latest message">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="6,9 12,15 18,9"/>
+            </svg>
+            <span data-i18n>New message</span>
+          </button>
         </div>
       </section>
     </main>
 
+    <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+    <script src="/theme.js"></script>
+    <script src="/i18n.js"></script>
     <script src="/shared.js"></script>
     <script src="/inbound.js"></script>
   </body>
