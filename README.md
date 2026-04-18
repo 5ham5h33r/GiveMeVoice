@@ -13,6 +13,7 @@
 - [Stack](#stack)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
+- [Full local setup: real calls and ngrok](#full-local-setup-real-calls-and-ngrok)
 - [Configuration](#configuration)
 - [Real calls with Twilio trial](#real-calls-with-twilio-trial)
 - [Real calls with paid Twilio](#real-calls-with-paid-twilio)
@@ -53,6 +54,8 @@
 
 ## Quick start
 
+After you clone the repo:
+
 ```bash
 git clone https://github.com/5ham5h33r/GiveMeVoice.git
 cd GiveMeVoice
@@ -60,14 +63,98 @@ npm install
 npm start
 ```
 
-Open **http://localhost:5050** (use a real `http://` URL so WebSockets work—not `file://`).
+Open **http://localhost:5050** in the browser (use a real `http://` URL so WebSockets work—not `file://`).
 
-Click **Run mock call (free — no phone, no APIs)**. No `.env` file required.
+- **Try the UI without phones or APIs:** click **Run mock call (free — no phone, no APIs)**. No `.env` file required.
+- **Place or receive real calls:** you need a filled-in `.env`, **and** a public HTTPS URL (usually **ngrok**) so Twilio can reach your laptop. Follow **[Full local setup: real calls and ngrok](#full-local-setup-real-calls-and-ngrok)** below.
 
 ```bash
 # optional: watch mode
 npm run dev
 ```
+
+## Full local setup: real calls and ngrok
+
+Twilio runs in the cloud. It must **POST** webhooks to your server and open a **WSS** media stream to your machine. **`localhost` is not reachable from the internet**, so on your own computer you expose port `5050` (or whatever you set in `PORT`) with a tunnel. This repo assumes **[ngrok](https://ngrok.com/)**; any similar HTTPS + WebSocket–capable tunnel works if you point Twilio at it the same way.
+
+### 1. Install dependencies and create `.env`
+
+```bash
+cd GiveMeVoice
+npm install
+cp .env.example .env
+# Windows (cmd/PowerShell):  copy .env.example .env
+```
+
+Edit `.env` and set at least: `OPENAI_API_KEY`, `TWILIO_ACCOUNT_SID` (must start with `AC`), `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` (E.164, e.g. `+15551234567`). You can leave `PUBLIC_HOSTNAME` empty until step 4.
+
+### 2. Start GiveMeVoice (first terminal)
+
+```bash
+npm start
+```
+
+Leave this running. Confirm the log shows the server on **http://localhost:5050** (or your `PORT`).
+
+### 3. Start ngrok (second terminal)
+
+1. Install ngrok: [ngrok download](https://ngrok.com/download). One-time setup: add your authtoken from the [ngrok dashboard](https://dashboard.ngrok.com/) (`ngrok config add-authtoken <your-token>`).
+2. Open a **new** terminal (keep `npm start` running).
+3. Run ngrok on the **same port** as the app (default `5050`):
+
+   ```bash
+   ngrok http 5050
+   ```
+
+   If you set `PORT=3000` in `.env`, use `ngrok http 3000` instead.
+
+4. In the ngrok terminal output, find the **Forwarding** line, for example:
+
+   ```text
+   Forwarding   https://monsoon-example.ngrok-free.dev -> http://localhost:5050
+   ```
+
+   Copy **only the hostname** — here `monsoon-example.ngrok-free.dev`.  
+   **Do not** include `https://`, paths, or query strings. That string is your `PUBLIC_HOSTNAME`.
+
+5. Optional: open **http://127.0.0.1:4040** for ngrok’s local inspector (every HTTP request Twilio sends will show up there — useful when debugging webhooks).
+
+### 4. Put the hostname in `.env` and restart Node
+
+In `.env`:
+
+```env
+PUBLIC_HOSTNAME=monsoon-example.ngrok-free.dev
+```
+
+Stop the server (Ctrl+C in the first terminal) and run `npm start` again. The startup log should print your public host so you know Twilio and WSS URLs will match.
+
+### 5. Point Twilio at this tunnel (inbound)
+
+For **incoming** calls to your Twilio number:
+
+1. [Twilio Console](https://console.twilio.com/) → **Phone Numbers** → **Manage** → **Active numbers** → select your Voice number.
+2. Under **Voice Configuration**, set **A call comes in** to **Webhook** (or compatible handler).
+3. URL: `https://<PUBLIC_HOSTNAME>/incoming-call` — for example `https://monsoon-example.ngrok-free.dev/incoming-call`.
+4. HTTP method: **POST** → **Save**.
+
+Outbound calls use URLs built from `PUBLIC_HOSTNAME` when the app creates the call; they still require ngrok (or your deployed host) to be up and the hostname to match.
+
+### 6. Use the app
+
+- **Outbound:** [http://localhost:5050](http://localhost:5050) — choose a scenario and place a call.
+- **Inbound:** [http://localhost:5050/inbound](http://localhost:5050/inbound) — set persona/language, save, then call your Twilio number.
+
+### ngrok checklist (when something fails)
+
+| Check | Why it matters |
+|--------|----------------|
+| **Two processes running** | `npm start` **and** `ngrok http <PORT>` must both be active while you test. |
+| **Same port** | `ngrok http` port = `PORT` in `.env` (default `5050`). |
+| **No `https://` in `PUBLIC_HOSTNAME`** | Should be hostname only, e.g. `something.ngrok-free.dev`. |
+| **Restart after `.env` change** | Node only reads env at startup. |
+| **New ngrok URL** | Free ngrok URLs often change when you restart ngrok. Put the new hostname in `.env`, restart the server, and **update the Twilio inbound webhook** to the new `https://…/incoming-call` URL. |
+| **Twilio logs** | If Twilio never hits your machine, confirm the webhook URL in Console matches your current `PUBLIC_HOSTNAME`. |
 
 ## Configuration
 
@@ -105,9 +192,8 @@ Use a **trial** Twilio project to avoid Twilio charges while developing; you sti
 1. Buy a **Voice-capable** Twilio number.  
 2. Verify **every** number you will dial (Console → Phone Numbers → Manage → Verified Caller IDs).  
 3. OpenAI: enable billing + create API key with Realtime access.  
-4. Run `ngrok http 5050` (or match `PORT` in `.env`).  
-5. Set `PUBLIC_HOSTNAME` to the ngrok **hostname** (no scheme). Restart the app after ngrok URL changes.  
-6. `npm start` → open `http://localhost:5050` → fill **Their phone number** in **E.164** → **Make the call on my behalf**.
+4. Complete **[Full local setup: real calls and ngrok](#full-local-setup-real-calls-and-ngrok)** (two terminals, `PUBLIC_HOSTNAME`, inbound webhook `https://<PUBLIC_HOSTNAME>/incoming-call` if you test inbound).  
+5. Open `http://localhost:5050` → fill **Their phone number** in **E.164** → **Make the call on my behalf**.
 
 Trial behavior (verified numbers, trial message) is documented by Twilio:  
 [How to use your free trial account](https://www.twilio.com/docs/usage/tutorials/how-to-use-your-free-trial-account).
@@ -172,6 +258,7 @@ Rough rule: several **short** real tests are often **under a few dollars** on Op
 | No transcript in UI | Use `http://localhost:PORT`, not `file://`; WebSocket must reach same origin |
 | TwiML never hits server | `PUBLIC_HOSTNAME` must be publicly reachable; keep ngrok running |
 | Port mismatch | `ngrok http` port = `PORT` in `.env` |
+| Lost after clone — what order? | See [Full local setup: real calls and ngrok](#full-local-setup-real-calls-and-ngrok): install → `.env` → `npm start` → **second terminal** `ngrok http <PORT>` → set `PUBLIC_HOSTNAME` → restart Node |
 
 ## Safety & compliance
 
