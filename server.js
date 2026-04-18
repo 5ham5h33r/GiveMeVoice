@@ -94,10 +94,20 @@ const sessions = new Map();
 
 function makeSession(payload) {
   const sessionId = randomUUID();
+  // Two language settings:
+  //  - callLanguage: what the AI agent SPEAKS on the phone.
+  //  - viewLanguage: what the user reads (transcript translations + summary).
+  // Older callers may pass `language` only — treat as both.
+  const callLanguage = payload.callLanguage || payload.language || "en";
+  const viewLanguage = payload.viewLanguage || payload.language || callLanguage;
   const session = {
     sessionId,
     scenarioId: payload.scenarioId,
-    language: payload.language || "hi",
+    callLanguage,
+    viewLanguage,
+    // Existing summary / per-line translation code reads `session.language` —
+    // map it to viewLanguage so the user sees things in their language.
+    language: viewLanguage,
     ctx: payload.ctx,
     transcript: [], // [{ role: 'agent'|'counterparty', text, at }]
     uiSockets: new Set(),
@@ -156,6 +166,7 @@ app.get("/api/sessions", (req, res) => {
     if (type === "inbound" && !s.isInbound) continue;
     if (type === "mock" && !s.isMock) continue;
     if (type === "outbound" && (s.isInbound || s.isMock)) continue;
+    const objective = (s.ctx?.objective || "").trim();
     list.push({
       sessionId: id,
       scenarioId: s.scenarioId,
@@ -167,6 +178,9 @@ app.get("/api/sessions", (req, res) => {
       closed: !!s.closed,
       transcriptCount: s.transcript.length,
       callerNumber: s.ctx?.callerNumber || null,
+      to: s.to || null,
+      counterpartyName: s.ctx?.counterpartyName || null,
+      objectivePreview: objective ? objective.split(/[.!?\n]/)[0].trim().slice(0, 90) : null,
       outcome: s.outcome?.outcome || null,
     });
   }
@@ -252,6 +266,104 @@ app.post("/api/sessions/:id/translate", async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Whole-page UI translation. Bulk-translates short UI strings into a chosen
+// language and caches them on disk (keeps the OpenAI bill negligible).
+// ---------------------------------------------------------------------------
+const UI_TRANSLATIONS_PATH = path.resolve("./ui-translations.json");
+let uiTranslations = {}; // { [lang]: { [enString]: translated } }
+try {
+  if (fs.existsSync(UI_TRANSLATIONS_PATH)) {
+    uiTranslations = JSON.parse(fs.readFileSync(UI_TRANSLATIONS_PATH, "utf8"));
+  }
+} catch (e) {
+  console.error("Failed to load ui-translations.json:", e.message);
+}
+function saveUiTranslations() {
+  try {
+    fs.writeFileSync(UI_TRANSLATIONS_PATH, JSON.stringify(uiTranslations, null, 2));
+  } catch (e) {
+    console.error("Failed to save ui-translations.json:", e.message);
+  }
+}
+
+app.post("/api/ui/translate", async (req, res) => {
+  const lang = String(req.body?.language || "en");
+  const strings = Array.isArray(req.body?.strings)
+    ? req.body.strings.filter((s) => typeof s === "string" && s.length > 0)
+    : [];
+  if (!strings.length) return res.json({ language: lang, translations: {} });
+
+  if (lang === "en") {
+    const map = {};
+    for (const s of strings) map[s] = s;
+    return res.json({ language: "en", translations: map });
+  }
+  if (!LANGUAGE_NAMES[lang]) {
+    return res.status(400).json({ error: "unsupported language" });
+  }
+  const langName = LANGUAGE_NAMES[lang];
+  uiTranslations[lang] = uiTranslations[lang] || {};
+  const cached = uiTranslations[lang];
+
+  const missing = strings.filter((s) => !(s in cached));
+  if (missing.length === 0) {
+    const out = {};
+    for (const s of strings) out[s] = cached[s];
+    return res.json({ language: lang, translations: out });
+  }
+
+  if (!OPENAI_API_KEY) {
+    // No API key — fall back to the source text so the UI still renders.
+    const out = {};
+    for (const s of strings) out[s] = cached[s] || s;
+    return res.json({
+      language: lang,
+      translations: out,
+      warning: "OPENAI_API_KEY missing — UI strings returned as English",
+    });
+  }
+
+  try {
+    const raw = await gpt([
+      {
+        role: "system",
+        content:
+          `You translate short user-interface strings into ${langName}. ` +
+          `Output STRICT JSON only — an object whose KEYS are EXACTLY each input English ` +
+          `string, and whose values are concise, natural ${langName} translations suitable ` +
+          `for compact UI labels. Preserve punctuation, ellipses (…), bullets (•), ` +
+          `emoji, leading symbols, parentheses, and example values like "+1310..." or ` +
+          `"e.g. Priya Sharma" (translate the surrounding words but keep the example ` +
+          `as-is or localize it sensibly). Do NOT translate brand names ("GiveMeVoice", ` +
+          `"Twilio", "OpenAI"). No markdown fences, no commentary.`,
+      },
+      { role: "user", content: JSON.stringify(missing) },
+    ]);
+    const cleaned = raw.replace(/^```json\s*|\s*```$/g, "").trim();
+    let parsed;
+    try { parsed = JSON.parse(cleaned); }
+    catch { parsed = {}; }
+    for (const s of missing) {
+      const v = parsed && typeof parsed[s] === "string" ? parsed[s] : null;
+      cached[s] = v || s;
+    }
+    saveUiTranslations();
+    const out = {};
+    for (const s of strings) out[s] = cached[s];
+    res.json({ language: lang, translations: out });
+  } catch (e) {
+    console.error("ui translate error:", e.message);
+    const out = {};
+    for (const s of strings) out[s] = cached[s] || s;
+    res.json({
+      language: lang,
+      translations: out,
+      warning: "translate call failed; returned source text",
+    });
+  }
+});
+
 app.get("/api/scenarios", (_req, res) => {
   res.json(
     Object.values(scenarios).map((s) => ({
@@ -267,10 +379,11 @@ app.get("/api/scenarios", (_req, res) => {
  */
 app.post("/api/call/mock", (req, res) => {
   try {
-    const { scenarioId, language, ctx } = req.body;
+    const { scenarioId, to, language, callLanguage, viewLanguage, ctx } = req.body;
     if (!scenarios[scenarioId]) return res.status(400).json({ error: "Unknown scenario" });
-    const session = makeSession({ scenarioId, language, ctx });
+    const session = makeSession({ scenarioId, language, callLanguage, viewLanguage, ctx });
     session.isMock = true;
+    session.to = to || null;
     res.json({ sessionId: session.sessionId, mock: true });
     queueMicrotask(() => {
       runMockCall(session).catch((e) => console.error("runMockCall:", e));
@@ -283,7 +396,7 @@ app.post("/api/call/mock", (req, res) => {
 
 app.post("/api/call", async (req, res) => {
   try {
-    const { scenarioId, to, language, ctx } = req.body;
+    const { scenarioId, to, language, callLanguage, viewLanguage, ctx } = req.body;
     if (!scenarios[scenarioId]) return res.status(400).json({ error: "Unknown scenario" });
     if (!to) return res.status(400).json({ error: "Missing `to` number" });
     if (!realCallConfigured()) {
@@ -293,7 +406,8 @@ app.post("/api/call", async (req, res) => {
       });
     }
 
-    const session = makeSession({ scenarioId, language, ctx });
+    const session = makeSession({ scenarioId, language, callLanguage, viewLanguage, ctx });
+    session.to = to;
 
     // Build absolute URLs Twilio will call.
     const host = PUBLIC_HOSTNAME.replace(/^https?:\/\//, "").replace(/\/$/, "");
@@ -407,6 +521,12 @@ app.post("/call-status", async (req, res) => {
   const session = sessions.get(sessionId);
   if (session) {
     broadcastToUI(session, { type: "call-status", status });
+    // Mark the session closed on any terminal status so the call history filter
+    // ("Live only", etc.) doesn't treat finished calls as still in progress.
+    if (status === "completed" || status === "failed" ||
+        status === "no-answer" || status === "busy" || status === "canceled") {
+      session.closed = true;
+    }
     if (status === "completed") {
       await summarizeSession(session).catch((e) =>
         console.error("summarize error:", e)
@@ -595,17 +715,26 @@ function handleTwilioMediaSocket(twilioWs) {
   let userBuffer = ""; // accumulating partial transcription of other party
 
   async function bootOpenAi() {
-    const langName = LANGUAGE_NAMES[session.language] || "English";
-    const promptCtx = { ...(session.ctx || {}), languageName: langName };
+    const callLang = session.callLanguage || session.language || "en";
+    const callLangName = LANGUAGE_NAMES[callLang] || "English";
+    const promptCtx = {
+      ...(session.ctx || {}),
+      callLanguageName: callLangName,
+      // Older inbound prompt template still reads `languageName`.
+      languageName: callLangName,
+    };
     const { instructions, voice } = buildPrompt(session.scenarioId, promptCtx);
     let { openingLine } = buildPrompt(session.scenarioId, promptCtx);
-    console.log(`[${sessionId}] media-stream opened, scenario=${session.scenarioId}, lang=${langName}`);
+    console.log(
+      `[${sessionId}] media-stream opened, scenario=${session.scenarioId}, ` +
+      `callLang=${callLangName}, viewLang=${session.viewLanguage || session.language}`
+    );
 
-    // If the call's language isn't English, translate the seed greeting so the first words
-    // the caller hears are in the right language. Safe fallback on failure.
-    if (session.language && session.language !== "en" && openingLine) {
+    // If the call's spoken language isn't English, translate the seed greeting so the
+    // first words the callee hears are in the right language. Safe fallback on failure.
+    if (callLang !== "en" && openingLine) {
       try {
-        const translated = await translateLine(openingLine, session.language);
+        const translated = await translateLine(openingLine, callLang);
         if (translated) openingLine = translated;
       } catch (e) {
         console.error(`[${sessionId}] opening-line translate failed:`, e.message);
@@ -793,9 +922,13 @@ async function pushTranscript(session, role, text) {
   session.transcript.push(entry);
   broadcastToUI(session, { type: "transcript", ...entry });
 
-  // Fire-and-forget translation to the user's language.
-  if (session.language && session.language !== "en") {
-    translateLine(text, session.language).then((translated) => {
+  // Fire-and-forget translation into the user's *view* language. Skip when
+  // the call is already being spoken in the view language (avoids round-trip
+  // OpenAI calls that would just echo the same text back).
+  const view = session.viewLanguage || session.language;
+  const call = session.callLanguage || session.language;
+  if (view && view !== "en" && view !== call) {
+    translateLine(text, view).then((translated) => {
       if (translated) {
         broadcastToUI(session, {
           type: "transcript-translation",

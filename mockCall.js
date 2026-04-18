@@ -141,7 +141,15 @@ function genericScript(scenarioId, ctx) {
     wagetheft: "how to start a wage claim in California",
     school: "student records and enrollment steps",
   };
-  const topic = labels[scenarioId] || "your request";
+  let topic;
+  if (scenarioId === "custom") {
+    const objective = (ctx.objective || "").trim();
+    topic =
+      (objective.split(/[.!?\n]/)[0] || "").trim().slice(0, 140) ||
+      "your request";
+  } else {
+    topic = labels[scenarioId] || "your request";
+  }
 
   return {
     turns: [
@@ -242,6 +250,7 @@ export async function runMockCall(session) {
   }
 
   await sleep(500);
+  session.closed = true;
   broadcast(session, { type: "call-status", status: "completed" });
   session.outcome = script.outcomeForLang(lang, session.ctx || {});
   broadcast(session, { type: "outcome", outcome: session.outcome });

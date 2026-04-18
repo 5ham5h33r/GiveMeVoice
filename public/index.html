@@ -4,107 +4,196 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>GiveMeVoice — makes the call for you</title>
+    <!-- Apply theme before paint to avoid a flash of the wrong colors. -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("gmv-ui-theme");
+          var theme = stored || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+          document.documentElement.setAttribute("data-theme", theme);
+        } catch (e) {}
+      })();
+    </script>
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
     <header>
       <div class="brand">
-        <div class="logo">GV</div>
+        <div class="logo" aria-label="GiveMeVoice">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 16.5v2.5a2 2 0 0 1-2.18 2 19.5 19.5 0 0 1-8.5-3.05 19 19 0 0 1-6-6A19.5 19.5 0 0 1 1.27 3.45 2 2 0 0 1 3.27 1.5h2.5a2 2 0 0 1 2 1.72 12 12 0 0 0 .65 2.6 2 2 0 0 1-.45 2.1L6.5 9.4a16 16 0 0 0 6 6l1.48-1.47a2 2 0 0 1 2.1-.45 12 12 0 0 0 2.6.65 2 2 0 0 1 1.72 2z"/>
+          </svg>
+        </div>
         <div>
           <h1>GiveMeVoice</h1>
-          <p class="tagline">
+          <p class="tagline" data-i18n>
             The phone call is the barrier. We make the call for you — in your language.
           </p>
         </div>
       </div>
       <nav class="tabs">
-        <a href="/" class="tab active">Make a call</a>
-        <a href="/inbound" class="tab">Answer calls</a>
+        <a href="/" class="tab active" data-i18n>Make a call</a>
+        <a href="/inbound" class="tab" data-tab="inbound"><span data-i18n>Answer calls</span><span class="tab-badge zero" id="inboundLiveBadge" aria-label="Live inbound calls">0</span></a>
       </nav>
-      <div class="status" id="connStatus">idle</div>
+      <div class="header-right">
+        <div class="lang-control" title="Page language" data-i18n-title>
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9"></circle>
+            <path d="M3 12h18"></path>
+            <path d="M12 3a14 14 0 0 1 0 18"></path>
+            <path d="M12 3a14 14 0 0 0 0 18"></path>
+          </svg>
+          <select id="siteLang" class="lang-switch" data-i18n-aria aria-label="Page language"></select>
+        </div>
+        <button type="button" class="theme-toggle" aria-label="Switch to dark theme (Shift+T)" title="Switch theme (Shift+T)" data-i18n-title aria-pressed="false">
+          <svg class="icon icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          </svg>
+          <svg class="icon icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="4"/>
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+          </svg>
+        </button>
+        <div class="status" id="connStatus" data-status="idle" data-i18n>idle</div>
+      </div>
     </header>
 
     <main>
       <!-- LEFT: setup form -->
       <section class="panel setup" id="setupPanel">
-        <h2>1. What do you need help with?</h2>
-        <div class="scenarios" id="scenarios"><!-- filled by JS --></div>
-
-        <h2>2. Your details</h2>
+        <h2><span class="step-num" aria-hidden="true">1</span><span data-i18n>Who's calling whom</span></h2>
         <div class="grid">
-          <label>Your name
-            <input id="userName" placeholder="e.g. Priya Sharma" />
+          <label data-i18n>Your name
+            <input id="userName" data-i18n-placeholder placeholder="e.g. Priya Sharma" />
           </label>
-          <label>Your language
-            <select id="language">
-              <option value="hi">Hindi (हिन्दी)</option>
-              <option value="es">Spanish (Español)</option>
-              <option value="zh">Mandarin (中文)</option>
-              <option value="vi">Vietnamese (Tiếng Việt)</option>
-              <option value="ar">Arabic (العربية)</option>
-              <option value="tl">Tagalog</option>
-              <option value="en">English</option>
-            </select>
+          <label data-i18n>Their name / company (optional)
+            <input id="counterpartyName" data-i18n-placeholder placeholder="e.g. Sunset Properties" />
           </label>
-          <label>Their name / company
-            <input id="counterpartyName" placeholder="e.g. Sunset Properties" />
+          <label data-i18n>Their phone number
+            <input id="to" type="tel" inputmode="tel" data-i18n-placeholder placeholder="+1310..." />
+            <span class="field-error" id="to-err"></span>
           </label>
-          <label>Their phone number
-            <input id="to" placeholder="+1310..." />
-          </label>
-          <label class="wide">Address / service location
-            <input id="address" placeholder="e.g. 123 W 27th St, Los Angeles, CA" />
-          </label>
-          <label class="wide">Describe the issue
-            <textarea id="issue" rows="3" placeholder="e.g. Heater has been broken for 9 days, bedroom reaches 54°F at night"></textarea>
-          </label>
-          <label>How long?
-            <input id="duration" placeholder="e.g. 9 days" />
-          </label>
-          <label>Prior notice given?
-            <input id="priorNotice" placeholder="e.g. texted manager Apr 8" />
-          </label>
-          <label>Your callback number
-            <input id="userCallbackNumber" placeholder="+1..." />
+          <label data-i18n>Your callback number (optional)
+            <input id="userCallbackNumber" type="tel" inputmode="tel" data-i18n-placeholder placeholder="+1..." />
+            <span class="field-error" id="userCallbackNumber-err"></span>
           </label>
         </div>
 
-        <button id="callBtn" class="primary">Make the call on my behalf</button>
-        <button type="button" id="mockBtn" class="secondary">Run mock call (free — no phone, no APIs)</button>
+        <h2><span class="step-num" aria-hidden="true">2</span><span data-i18n>Languages</span></h2>
+        <div class="grid">
+          <label data-i18n>Call language
+            <select id="callLanguage"></select>
+            <span class="field-hint" data-i18n>What the assistant speaks on the phone.</span>
+          </label>
+          <label data-i18n>Your language
+            <select id="viewLanguage"></select>
+            <span class="field-hint" data-i18n>Used for the live transcript and call summary.</span>
+          </label>
+        </div>
 
-        <p class="fineprint">
+        <h2><span class="step-num" aria-hidden="true">3</span><span data-i18n>What do you need on this call?</span></h2>
+        <div class="grid">
+          <label class="wide" data-i18n>Describe the call in your own words
+            <textarea id="callObjective" rows="4" data-i18n-placeholder placeholder="e.g. Schedule a heater repair appointment at 123 W 27th St, LA. Heat has been out 9 days, bedroom hits 54°F at night."></textarea>
+            <span class="char-count" id="objectiveCount"></span>
+            <span class="field-error" id="callObjective-err"></span>
+          </label>
+          <label class="wide" data-i18n>Useful facts the assistant can mention (optional)
+            <textarea id="helpfulContext" rows="3" data-i18n-placeholder placeholder="Account #, address, dates, prior contact, deadlines, anything the agent should reference."></textarea>
+          </label>
+        </div>
+
+        <div class="cta-row">
+          <button id="callBtn" class="primary">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
+            </svg>
+            <span data-i18n>Make the call on my behalf</span>
+          </button>
+          <button type="button" id="mockBtn" class="secondary" data-i18n>Run mock call (free — no phone, no APIs)</button>
+        </div>
+
+        <p class="fineprint" data-i18n>
           This assistant acts on your behalf and under your direction. It is
           not a lawyer and does not give legal advice. Real calls are recorded
           for your records. Mock calls are simulated locally for testing only.
         </p>
+
+        <h2 style="margin-top:24px"><span data-i18n>Call history</span>
+          <button type="button" id="outRefreshBtn" class="inline-refresh" data-i18n>Refresh</button>
+        </h2>
+        <div class="inbound-filters" id="outboundFilters" role="tablist" aria-label="Filter calls">
+          <button type="button" class="filter-pill active" data-filter="all" data-i18n>All</button>
+          <button type="button" class="filter-pill" data-filter="live" data-i18n>Live only</button>
+          <button type="button" class="filter-pill" data-filter="today" data-i18n>Today</button>
+          <button type="button" class="filter-pill" data-filter="week" data-i18n>This week</button>
+        </div>
+        <div id="outboundList" class="inbound-list"></div>
       </section>
 
-      <!-- RIGHT: live call + transcript -->
+      <!-- RIGHT: live call + outcome (above) + transcript -->
       <section class="panel live" id="livePanel">
         <div class="live-header">
-          <h2>Live call</h2>
-          <span id="callStatus" class="pill">not started</span>
+          <h2 data-i18n>Live call</h2>
+          <span id="callStatus" class="pill" data-i18n>not started</span>
         </div>
-        <div id="transcript" class="transcript"></div>
+
         <div id="outcome" class="outcome hidden">
-          <h3>Outcome</h3>
-          <div class="outcome-pill" id="outcomeTag"></div>
+          <div class="outcome-header">
+            <h3 data-i18n>Outcome</h3>
+            <div class="outcome-pill" id="outcomeTag"></div>
+            <div class="outcome-actions">
+              <button type="button" class="outcome-action-btn" id="copyOutcomeBtn" title="Copy summary to clipboard" data-i18n-title>
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
+                <span data-i18n>Copy</span>
+              </button>
+              <button type="button" class="outcome-action-btn" id="emailOutcomeBtn" title="Email summary" data-i18n-title>
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+                  <polyline points="22,6 12,13 2,6"/>
+                </svg>
+                <span data-i18n>Email</span>
+              </button>
+            </div>
+          </div>
           <div class="outcome-block">
             <div class="outcome-lang">
-              <label for="outcomeLang">Show summary in:</label>
+              <label for="outcomeLang" data-i18n>Show summary in:</label>
               <select id="outcomeLang"></select>
             </div>
-            <h4 id="summaryNativeHeader">Summary</h4>
+            <h4 id="summaryNativeHeader" data-i18n>Summary</h4>
             <p id="summaryNative"></p>
-            <h4 id="summaryEnHeader">Summary (English)</h4>
+            <h4 id="summaryEnHeader" data-i18n>Summary (English)</h4>
             <p id="summaryEn"></p>
-            <h4 id="nextStepsHeader">Next steps</h4>
+            <h4 id="nextStepsHeader" data-i18n>Next steps</h4>
             <ul id="nextSteps"></ul>
           </div>
+        </div>
+
+        <div id="transcript" class="transcript">
+          <div class="transcript-empty" id="transcriptEmpty">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+            <p data-i18n>Once the call connects, each turn will appear here — translated into your language in real time.</p>
+          </div>
+          <button type="button" class="scroll-bottom-btn" id="scrollBottomBtn" aria-label="Scroll to latest message">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="6,9 12,15 18,9"/>
+            </svg>
+            <span data-i18n>New message</span>
+          </button>
         </div>
       </section>
     </main>
 
+    <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+    <script src="/theme.js"></script>
+    <script src="/i18n.js"></script>
     <script src="/shared.js"></script>
     <script src="/outbound.js"></script>
   </body>
