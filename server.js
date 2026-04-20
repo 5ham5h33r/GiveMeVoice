@@ -129,6 +129,16 @@ function broadcastToUI(session, message) {
   }
 }
 
+// Mark a session as closed in exactly one place so every teardown path
+// (Twilio completed/failed/canceled webhooks, media stream close, user
+// hang-up, OpenAI death) records a consistent endedAt timestamp. Safe to
+// call repeatedly — only the first call wins.
+function markSessionClosed(session) {
+  if (!session) return;
+  if (!session.closed) session.closed = true;
+  if (!session.endedAt) session.endedAt = Date.now();
+}
+
 // ---------------------------------------------------------------------------
 // REST endpoints
 // ---------------------------------------------------------------------------
@@ -139,6 +149,7 @@ app.get("/api/inbound-config", (_req, res) => {
     ...inboundConfig,
     webhookUrl: host ? `https://${host}/incoming-call` : null,
     publicHostConfigured: !!host,
+    inboundNumber: TWILIO_FROM_NUMBER || null,
   });
 });
 
@@ -172,6 +183,10 @@ app.get("/api/sessions", (req, res) => {
       scenarioId: s.scenarioId,
       language: s.language,
       startedAt: s.startedAt,
+      endedAt: s.endedAt || null,
+      // Closed calls report their wall-clock duration; live ones expose
+      // nothing (the UI ticks its own timer).
+      durationMs: s.endedAt ? Math.max(0, s.endedAt - s.startedAt) : null,
       isInbound: !!s.isInbound,
       isMock: !!s.isMock,
       callSid: s.callSid,
@@ -263,6 +278,74 @@ app.post("/api/sessions/:id/translate", async (req, res) => {
   } catch (e) {
     console.error("translate outcome error:", e.message);
     res.status(500).json({ error: "translate failed" });
+  }
+});
+
+/**
+ * Hang up a live call. For real Twilio calls we ask Twilio to complete the
+ * call (the media stream close will then trigger summarization). For mock
+ * calls we just mark the session closed; the mock runner will bail out on
+ * its next tick. Idempotent — safe to call on already-ended sessions.
+ * Returns: { ok: true, status: "ended" | "already_closed" | "no_call_sid" }
+ */
+app.post("/api/sessions/:id/end", async (req, res) => {
+  const s = sessions.get(req.params.id);
+  if (!s) return res.status(404).json({ error: "unknown session" });
+  if (s.closed) return res.json({ ok: true, status: "already_closed" });
+
+  s.userEnded = true;
+
+  if (s.isMock) {
+    markSessionClosed(s);
+    broadcastToUI(s, { type: "call-status", status: "completed" });
+    return res.json({ ok: true, status: "ended" });
+  }
+
+  if (!s.callSid) {
+    // Real session but Twilio hasn't reported a CallSid yet. Mark closed so
+    // the realtime bridge tears itself down when it next checks.
+    markSessionClosed(s);
+    broadcastToUI(s, { type: "call-status", status: "completed" });
+    return res.json({ ok: true, status: "no_call_sid" });
+  }
+
+  // Twilio's REST API rejects `status: "completed"` for calls that haven't
+  // been answered yet ("Call is not in-progress. Cannot redirect."). In that
+  // case we have to use `canceled` instead, which is valid for
+  // queued/ringing/initiated calls. Try the common path first, fall back.
+  try {
+    const client = getTwilioClient();
+    let finalStatus = "completed";
+    try {
+      await client.calls(s.callSid).update({ status: "completed" });
+    } catch (e) {
+      const msg = String(e && e.message || "");
+      if (/not.*in[-\s]?progress|cannot.*redirect|21220/i.test(msg)) {
+        await client.calls(s.callSid).update({ status: "canceled" });
+        finalStatus = "canceled";
+      } else {
+        throw e;
+      }
+    }
+
+    // Twilio WILL eventually POST /call-status with the terminal status, which
+    // marks the session closed and kicks off summarization. But that webhook
+    // can be delayed or lost (ngrok blip, network hiccup) and when it's late
+    // the call history shows the row as LIVE forever. Be defensive: mark
+    // closed and broadcast right now. The later webhook is a no-op thanks to
+    // markSessionClosed / summarizeSession idempotency.
+    markSessionClosed(s);
+    broadcastToUI(s, { type: "call-status", status: finalStatus });
+    if (finalStatus === "completed" && s.transcript.length) {
+      summarizeSession(s).catch((e) =>
+        console.error("summarize after end error:", e.message)
+      );
+    }
+
+    res.json({ ok: true, status: "ended" });
+  } catch (e) {
+    console.error("end call error:", e.message);
+    res.status(500).json({ error: "end failed: " + e.message });
   }
 });
 
@@ -525,7 +608,7 @@ app.post("/call-status", async (req, res) => {
     // ("Live only", etc.) doesn't treat finished calls as still in progress.
     if (status === "completed" || status === "failed" ||
         status === "no-answer" || status === "busy" || status === "canceled") {
-      session.closed = true;
+      markSessionClosed(session);
     }
     if (status === "completed") {
       await summarizeSession(session).catch((e) =>
@@ -654,6 +737,10 @@ server.on("upgrade", (req, socket, head) => {
     wss.handleUpgrade(req, socket, head, (ws) => {
       ws.crossCallPath = url.pathname;
       ws.crossCallSessionId = url.searchParams.get("sessionId");
+      // Optional: the page language the viewer is reading the app in. Used for
+      // line-by-line transcript translations so e.g. a Hindi inbound call is
+      // shown to an English-reading operator with English translations.
+      ws.crossCallViewerLang = url.searchParams.get("lang") || null;
       wss.emit("connection", ws, req);
     });
   } else {
@@ -679,10 +766,71 @@ function handleUISocket(ws) {
     return;
   }
   session.uiSockets.add(ws);
-  // Replay any transcript already accumulated (useful if UI reconnects).
+
+  const viewerLang = ws.crossCallViewerLang;
+  const callLang = session.callLanguage || session.language;
+
+  // Inbound calls never had an explicit "view language" picked in a form — the
+  // session was born with viewLanguage = callLanguage. Adopt the first viewer's
+  // page language so subsequent live turns get translated into something they
+  // can actually read. (We only do this while the call is still live, to avoid
+  // rewriting history on a past, already-summarized session.)
+  if (
+    viewerLang &&
+    session.isInbound &&
+    !session.closed &&
+    session.viewLanguage === callLang &&
+    viewerLang !== callLang
+  ) {
+    session.viewLanguage = viewerLang;
+    // Keep session.language (used by summarization) aligned with what the
+    // operator is actually reading in.
+    session.language = viewerLang;
+    console.log(
+      `[${sessionId}] inbound: adopted viewer lang "${viewerLang}" (call is "${callLang}")`
+    );
+  }
+
+  // Replay any transcript already accumulated (useful if UI reconnects, or if
+  // the user is clicking into a past session from the history list).
   for (const t of session.transcript) {
     ws.send(JSON.stringify({ type: "transcript", ...t }));
   }
+
+  // Replay line-by-line translations for existing turns. Two cases:
+  //   LIVE session:   use session.viewLanguage so this socket matches what
+  //                   pushTranscript will broadcast for future turns. (For
+  //                   inbound we may have just set viewLanguage to viewerLang
+  //                   above, so it still honours the viewer.)
+  //   CLOSED session: use viewerLang directly so the user can re-read a past
+  //                   call in their current page language regardless of
+  //                   whatever language it was originally viewed in.
+  const replayLang = session.closed
+    ? viewerLang
+    : session.viewLanguage || viewerLang;
+  if (replayLang && replayLang !== callLang && session.transcript.length) {
+    for (const t of session.transcript) {
+      translateLine(t.text, replayLang)
+        .then((translated) => {
+          if (
+            translated &&
+            translated !== t.text &&
+            ws.readyState === WebSocket.OPEN
+          ) {
+            ws.send(
+              JSON.stringify({
+                type: "transcript-translation",
+                at: t.at,
+                role: t.role,
+                translated,
+              })
+            );
+          }
+        })
+        .catch(() => {});
+    }
+  }
+
   if (session.outcome) {
     ws.send(JSON.stringify({ type: "outcome", outcome: session.outcome }));
   }
@@ -753,7 +901,30 @@ function handleTwilioMediaSocket(twilioWs) {
 
     openAiWs.on("open", () => onOpenAiOpen(instructions, openingLine, voice));
     openAiWs.on("message", onOpenAiMessage);
-    openAiWs.on("close", () => console.log(`[${sessionId}] OpenAI closed`));
+    openAiWs.on("close", () => {
+      console.log(`[${sessionId}] OpenAI closed`);
+      // If the realtime model disappears mid-call, Twilio will keep the line
+      // open with no audio (silent call). Tear down the Twilio stream so the
+      // caller hangs up cleanly instead of staring at an unresponsive agent.
+      if (session && !session.closed) {
+        console.log(`[${sessionId}] OpenAI went away during live call — hanging up Twilio stream`);
+        try {
+          if (twilioWs.readyState === WebSocket.OPEN) twilioWs.close();
+        } catch {}
+        // Best-effort hangup via REST so Twilio's call record closes immediately.
+        if (session.callSid && !session.isMock) {
+          getTwilioClient().calls(session.callSid)
+            .update({ status: "completed" })
+            .catch((err) => {
+              const msg = String(err && err.message || "");
+              if (/not.*in[-\s]?progress|cannot.*redirect|21220/i.test(msg)) {
+                return getTwilioClient().calls(session.callSid).update({ status: "canceled" }).catch(() => {});
+              }
+              console.error(`[${sessionId}] hangup after OpenAI close failed:`, msg);
+            });
+        }
+      }
+    });
     openAiWs.on("error", (e) => console.error(`[${sessionId}] OpenAI error:`, e.message));
   }
 
@@ -905,7 +1076,7 @@ function handleTwilioMediaSocket(twilioWs) {
     console.log(`[${sessionId || "?"}] Twilio ws closed`);
     try { if (openAiWs) openAiWs.close(); } catch {}
     if (session && !session.closed) {
-      session.closed = true;
+      markSessionClosed(session);
       broadcastToUI(session, { type: "call-status", status: "completed" });
       // Inbound calls don't get a Twilio /call-status webhook the way /api/call does,
       // so we generate the outcome here when the media stream goes away.
@@ -940,6 +1111,23 @@ async function pushTranscript(session, role, text) {
     });
   }
 }
+
+// Periodically evict long-dead sessions so the in-memory Map doesn't grow
+// unbounded on a long-running server. We keep closed sessions around for
+// SESSION_RETENTION_MS so the UI can still read the outcome / transcript,
+// and live sessions forever (until they actually close).
+const SESSION_RETENTION_MS = 24 * 60 * 60 * 1000; // 24h
+setInterval(() => {
+  const now = Date.now();
+  let evicted = 0;
+  for (const [id, s] of sessions) {
+    if (s.closed && s.endedAt && now - s.endedAt > SESSION_RETENTION_MS) {
+      sessions.delete(id);
+      evicted++;
+    }
+  }
+  if (evicted) console.log(`session-gc: evicted ${evicted} session(s) older than ${SESSION_RETENTION_MS / 3600000}h`);
+}, 60 * 60 * 1000).unref();
 
 server.listen(PORT, () => {
   console.log(`\nGiveMeVoice server listening on http://localhost:${PORT}`);

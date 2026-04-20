@@ -97,6 +97,42 @@ function validateObjective(value) {
   return null;
 }
 
+// Returns true if the form still looks like the demo prefill — i.e. the user
+// hasn't substituted their own content. We compare the currently-rendered
+// (possibly translated) field value against the translated prefill source so
+// we don't false-trigger after a site-language switch.
+function fieldMatchesPrefill(id) {
+  const el = $(id);
+  if (!el) return false;
+  const src = PREFILL[id];
+  if (typeof src !== "string") return false;
+  const v = (el.value || "").trim();
+  if (!v) return false;
+  if (v === src.trim()) return true;
+  // If i18n translated the prefill, the current value still matches its
+  // source — easy to detect via the data-i18n-value attribute we set at load.
+  if (el.hasAttribute("data-i18n-value") && el.dataset.i18nValSrc === src) return true;
+  return false;
+}
+
+function formLooksLikeDemo() {
+  // Any of the three content fields still unchanged from the demo counts as
+  // "this is the demo" — all three changing means the user intentionally
+  // customised the call.
+  return (
+    fieldMatchesPrefill("userName") ||
+    fieldMatchesPrefill("counterpartyName") ||
+    fieldMatchesPrefill("callObjective") ||
+    fieldMatchesPrefill("helpfulContext")
+  );
+}
+
+function updateDemoWarning() {
+  const w = $("demoWarning");
+  if (!w) return;
+  w.hidden = !formLooksLikeDemo();
+}
+
 async function initOutbound() {
   await ensureLanguagesLoaded();
   populateLanguageSelect("callLanguage", "en");
@@ -119,8 +155,10 @@ async function initOutbound() {
     el.addEventListener("input", () => {
       el.dataset.i18nUserEdited = "1";
       debouncedSave();
+      updateDemoWarning();
     });
   }
+  updateDemoWarning();
 
   // Phone fields and language selects don't have a prefilled English source;
   // hydrate from persisted values and persist on change.
@@ -258,22 +296,25 @@ function renderOutboundHistory(list) {
     const turnsLabel = s.transcriptCount === 1 ? tr("turn") : tr("turns");
     const label = s.counterpartyName || s.to || (s.isMock ? tr("Mock call") : tr("unknown destination"));
     const sub = s.objectivePreview || "";
-    const meta = `${s.transcriptCount} ${turnsLabel}` +
-      (s.outcome ? ` · ${tr("outcome:")} ${tr(s.outcome)}` : "") +
-      (sub ? ` · ${sub}` : "");
-
-    const liveOrDone = tr(live ? "live" : "done");
     const kindLabel = s.isMock ? tr("mock") : tr("real");
+    const dur = s.durationMs ? formatDurationShort(s.durationMs) : null;
+    const meta = [
+      kindLabel,
+      dur,
+      `${s.transcriptCount} ${turnsLabel}`,
+      s.outcome ? tr(s.outcome) : null,
+      sub || null,
+    ].filter(Boolean).join(" · ");
+
+    const badgeText = live ? tr("live") : tr("done");
 
     row.innerHTML = `
       <span class="when">${timeStr}</span>
-      <div>
+      <div class="who-block">
         <div class="from"></div>
         <div class="meta"></div>
       </div>
-      <span class="badge ${live ? "live" : ""}">${liveOrDone}</span>
-      <span class="meta">${kindLabel}</span>
-      <span class="meta">${tr("view →")}</span>
+      <span class="badge ${live ? "live" : ""}">${badgeText}</span>
     `;
     row.querySelector(".from").textContent = label;
     row.querySelector(".meta").textContent = meta;
@@ -319,6 +360,24 @@ async function startCall(isMock) {
     if (objErr) $("callObjective").focus();
     else $("to").focus();
     return;
+  }
+
+  // Last-mile safety net: if the user is about to place a *real* call while
+  // the form still looks like the shipped demo, make them confirm. Mock calls
+  // don't cost anything so we skip this check for them.
+  if (!isMock && formLooksLikeDemo()) {
+    const ok = confirm(tr(
+      "The form still has the example demo values.\n\n" +
+      "You're about to place a real phone call with those details. " +
+      "Do you want to continue anyway?"
+    ));
+    if (!ok) {
+      // Focus the first unedited field so the fix is obvious.
+      for (const id of ["userName", "counterpartyName", "callObjective", "helpfulContext"]) {
+        if (fieldMatchesPrefill(id)) { $(id).focus(); break; }
+      }
+      return;
+    }
   }
 
   resetLivePanel();
@@ -373,5 +432,10 @@ async function startCall(isMock) {
     }
   }
 }
+
+document.addEventListener("i18n:applied", () => {
+  // Translations may have replaced prefill values; re-evaluate the banner.
+  if (typeof updateDemoWarning === "function") updateDemoWarning();
+});
 
 initOutbound();

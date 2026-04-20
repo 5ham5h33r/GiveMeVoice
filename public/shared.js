@@ -9,6 +9,17 @@ const state = {
   languages: [],
   lastOutcome: null,
   autoScroll: true,
+  // Duration tracking. startedAt is set once the call goes "live" (ringing/
+  // answered) and cleared when it ends. durationInterval ticks the UI while
+  // the call is live so the user sees a running mm:ss.
+  callStartedAt: null,
+  callEndedAt: null,
+  durationInterval: null,
+  // Whether the current session is a real call (end-call should hit Twilio)
+  // or a mock (we just mark closed). We don't actually need to distinguish
+  // in the UI — /api/sessions/:id/end handles both — but knowing lets us show
+  // the button only when it's actionable.
+  canEndCall: false,
 };
 
 async function ensureLanguagesLoaded() {
@@ -140,6 +151,11 @@ function resetLivePanel() {
   if ($("nextSteps")) $("nextSteps").innerHTML = "";
   state.turns.clear();
   state.autoScroll = true;
+  state.callStartedAt = null;
+  state.callEndedAt = null;
+  stopDurationTicker();
+  setDurationText("");
+  showEndCallBtn(false);
   if (state.ws) {
     state.ws._suppressClose = true;
     try { state.ws.close(); } catch {}
@@ -153,7 +169,15 @@ function connectUIStream(sessionId) {
   state.sessionId = sessionId;
   state.lastOutcome = null;
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${proto}://${location.host}/ui?sessionId=${sessionId}`);
+  // Tell the server which language this viewer reads in. The server uses this
+  // to (a) override viewLanguage for inbound calls that never had one set
+  // explicitly and (b) translate any replayed historical transcript into
+  // the viewer's language. Without this, a Hindi inbound call would show the
+  // English-reading operator Hindi-only transcripts.
+  const viewerLang = (window.I18N && I18N.lang) || "en";
+  const ws = new WebSocket(
+    `${proto}://${location.host}/ui?sessionId=${sessionId}&lang=${encodeURIComponent(viewerLang)}`
+  );
   state.ws = ws;
   ws.addEventListener("open", () => setConn("connected"));
   // Once the call has ended (or we're tearing down to start a new one), we don't
@@ -197,6 +221,15 @@ if (window.I18N) {
     "Set PUBLIC_HOSTNAME in your .env (e.g. via ngrok) to expose your inbound webhook.",
     "Refresh", "Show summary in:", "Outcome", "Call history",
     "mock", "real", "Mock call", "unknown destination",
+    "End call", "Ending…", "Couldn't end the call — ",
+    "Hang up the call", "Share this number with callers",
+    "Twilio webhook URL (Voice → A call comes in)",
+    "Paste the webhook URL into your Twilio number's Voice \"A call comes in\" setting.",
+    "Not configured — set PUBLIC_HOSTNAME in .env (use ngrok) and restart.",
+    "If asked, the assistant shares this instead of your personal number.",
+    "View this summary in another language",
+    "These are example values to showcase the app. Edit the form with your own details before placing a real call.",
+    "The form still has the example demo values.\n\nYou're about to place a real phone call with those details. Do you want to continue anyway?",
   ]);
 }
 function tr(s) { return (window.I18N && window.I18N.t(s)) || s; }
@@ -438,6 +471,115 @@ function setStatus(text, cls = "") {
   el.dataset.i18nSrc = text;
   el.textContent = tr(text);
   el.className = "pill " + cls;
+
+  // Keep the end-call button + duration timer in sync with the call state.
+  if (cls === "live") {
+    if (!state.callStartedAt) state.callStartedAt = Date.now();
+    state.callEndedAt = null;
+    startDurationTicker();
+    showEndCallBtn(true);
+  } else if (cls === "done") {
+    if (!state.callEndedAt) state.callEndedAt = Date.now();
+    stopDurationTicker();
+    // Render the final duration one more time.
+    tickDuration();
+    showEndCallBtn(false);
+  } else {
+    // "not started" / "none" / idle — hide duration and button.
+    stopDurationTicker();
+    state.callStartedAt = null;
+    state.callEndedAt = null;
+    setDurationText("");
+    showEndCallBtn(false);
+  }
+}
+
+// -------------------------------------------------------------------------
+// Call duration ticker + End call button
+// -------------------------------------------------------------------------
+
+function formatDuration(ms) {
+  if (!ms || ms < 0) return "";
+  const total = Math.floor(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+}
+
+// Short human form for call-list rows — "42s", "1m 12s", "4m". We keep the
+// leading-zero mm:ss for the live header (fixed width) but row meta looks
+// nicer without it.
+function formatDurationShort(ms) {
+  if (!ms || ms < 0) return "";
+  const total = Math.floor(ms / 1000);
+  if (total < 60) return `${total}s`;
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return s ? `${m}m ${s}s` : `${m}m`;
+}
+window.formatDurationShort = formatDurationShort;
+
+function setDurationText(s) {
+  const el = $("callDuration");
+  if (!el) return;
+  el.textContent = s;
+  el.classList.toggle("hidden", !s);
+}
+
+function tickDuration() {
+  if (!state.callStartedAt) return setDurationText("");
+  const end = state.callEndedAt || Date.now();
+  setDurationText(formatDuration(end - state.callStartedAt));
+}
+
+function startDurationTicker() {
+  if (state.durationInterval) return;
+  tickDuration();
+  state.durationInterval = setInterval(tickDuration, 1000);
+}
+
+function stopDurationTicker() {
+  if (state.durationInterval) {
+    clearInterval(state.durationInterval);
+    state.durationInterval = null;
+  }
+}
+
+function showEndCallBtn(show) {
+  const btn = $("endCallBtn");
+  if (!btn) return;
+  btn.hidden = !show;
+  btn.disabled = !show || !state.sessionId;
+}
+
+async function endCurrentCall() {
+  if (!state.sessionId) return;
+  const btn = $("endCallBtn");
+  if (btn) {
+    btn.disabled = true;
+    const span = btn.querySelector("span");
+    if (span) span.textContent = tr("Ending…");
+  }
+  try {
+    const r = await fetch(`/api/sessions/${state.sessionId}/end`, { method: "POST" });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ error: r.statusText }));
+      throw new Error(err.error || r.statusText);
+    }
+    // The call-status "completed" event from the server will flip UI state.
+    // If that doesn't arrive within a second (e.g. mock), force it locally.
+    setTimeout(() => {
+      if (!state.callEndedAt) setStatus("call ended", "done");
+    }, 1200);
+  } catch (e) {
+    console.error("end call failed:", e);
+    showToast(tr("Couldn't end the call — ") + e.message, "error", 5000);
+    if (btn) {
+      btn.disabled = false;
+      const span = btn.querySelector("span");
+      if (span) span.textContent = tr("End call");
+    }
+  }
 }
 function setConn(text) {
   const el = $("connStatus");
@@ -506,6 +648,7 @@ document.addEventListener("DOMContentLoaded", pollInboundLiveBadge);
 document.addEventListener("DOMContentLoaded", () => {
   if ($("copyOutcomeBtn")) $("copyOutcomeBtn").addEventListener("click", copyOutcomeToClipboard);
   if ($("emailOutcomeBtn")) $("emailOutcomeBtn").addEventListener("click", emailOutcome);
+  if ($("endCallBtn")) $("endCallBtn").addEventListener("click", endCurrentCall);
   const tx = $("transcript");
   if (tx) ensureScrollBottomWired(tx);
 });

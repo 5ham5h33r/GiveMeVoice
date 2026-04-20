@@ -243,16 +243,26 @@ export async function runMockCall(session) {
 
   let tick = 0;
   for (const step of script.turns) {
+    // If the user hung up from the UI, bail out cleanly.
+    if (session.closed || session.userEnded) break;
     if (step.delayMs) await sleep(step.delayMs);
+    if (session.closed || session.userEnded) break;
     const at = session.startedAt + ++tick;
     const translated = step.translations?.[lang] || null;
     pushMockTurn(session, step.role, step.en, at, translated);
   }
 
   await sleep(500);
+  const wasEndedByUser = session.userEnded;
   session.closed = true;
+  if (!session.endedAt) session.endedAt = Date.now();
   broadcast(session, { type: "call-status", status: "completed" });
+  // Still surface an outcome so the user sees a summary even if they hung up
+  // mid-script — the partial transcript is usually enough for a useful summary.
   session.outcome = script.outcomeForLang(lang, session.ctx || {});
+  if (wasEndedByUser && session.outcome && typeof session.outcome === "object") {
+    session.outcome.outcome = session.outcome.outcome || "partial";
+  }
   broadcast(session, { type: "outcome", outcome: session.outcome });
 }
 

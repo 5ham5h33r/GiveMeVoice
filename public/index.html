@@ -78,6 +78,7 @@
           </label>
           <label data-i18n>Your callback number (optional)
             <input id="userCallbackNumber" type="tel" inputmode="tel" data-i18n-placeholder placeholder="+1..." />
+            <span class="field-hint" data-i18n>If asked, the assistant shares this instead of your personal number.</span>
             <span class="field-error" id="userCallbackNumber-err"></span>
           </label>
         </div>
@@ -106,6 +107,11 @@
           </label>
         </div>
 
+        <div class="demo-warning" id="demoWarning" hidden role="status" data-i18n>
+          These are example values to showcase the app. Edit the form with your
+          own details before placing a real call.
+        </div>
+
         <div class="cta-row">
           <button id="callBtn" class="primary">
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -122,9 +128,12 @@
           for your records. Mock calls are simulated locally for testing only.
         </p>
 
-        <h2 style="margin-top:24px"><span data-i18n>Call history</span>
+        <div class="panel-divider" role="separator" aria-hidden="true"></div>
+
+        <div class="section-head-row">
+          <h2 data-i18n>Call history</h2>
           <button type="button" id="outRefreshBtn" class="inline-refresh" data-i18n>Refresh</button>
-        </h2>
+        </div>
         <div class="inbound-filters" id="outboundFilters" role="tablist" aria-label="Filter calls">
           <button type="button" class="filter-pill active" data-filter="all" data-i18n>All</button>
           <button type="button" class="filter-pill" data-filter="live" data-i18n>Live only</button>
@@ -138,7 +147,16 @@
       <section class="panel live" id="livePanel">
         <div class="live-header">
           <h2 data-i18n>Live call</h2>
-          <span id="callStatus" class="pill" data-i18n>not started</span>
+          <div class="live-header-right">
+            <span id="callDuration" class="duration" aria-live="polite"></span>
+            <span id="callStatus" class="pill" data-i18n>not started</span>
+            <button type="button" id="endCallBtn" class="end-call-btn" hidden data-i18n-title title="Hang up the call">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" transform="rotate(135 12 12)"/>
+              </svg>
+              <span data-i18n>End call</span>
+            </button>
+          </div>
         </div>
 
         <div id="outcome" class="outcome hidden">
@@ -146,6 +164,15 @@
             <h3 data-i18n>Outcome</h3>
             <div class="outcome-pill" id="outcomeTag"></div>
             <div class="outcome-actions">
+              <div class="outcome-lang" title="View this summary in another language" data-i18n-title>
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9"></circle>
+                  <path d="M3 12h18"></path>
+                  <path d="M12 3a14 14 0 0 1 0 18"></path>
+                  <path d="M12 3a14 14 0 0 0 0 18"></path>
+                </svg>
+                <select id="outcomeLang" aria-label="Summary language"></select>
+              </div>
               <button type="button" class="outcome-action-btn" id="copyOutcomeBtn" title="Copy summary to clipboard" data-i18n-title>
                 <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
@@ -163,10 +190,6 @@
             </div>
           </div>
           <div class="outcome-block">
-            <div class="outcome-lang">
-              <label for="outcomeLang" data-i18n>Show summary in:</label>
-              <select id="outcomeLang"></select>
-            </div>
             <h4 id="summaryNativeHeader" data-i18n>Summary</h4>
             <p id="summaryNative"></p>
             <h4 id="summaryEnHeader" data-i18n>Summary (English)</h4>

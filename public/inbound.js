@@ -42,9 +42,55 @@ async function loadInboundConfig() {
     $("inLanguage").value = cfg.language || "en";
     $("inVoice").value = cfg.voice || "alloy";
     $("inPersona").value = cfg.persona || "";
+    renderSetupBanner(cfg);
   } catch (e) {
     console.error(e);
   }
+}
+
+// Always-visible "how to connect" block at the top of the config panel.
+// Shows the Twilio phone number (so the user can share it with callers) and
+// the webhook URL (so they can paste it into the Twilio console).
+function renderSetupBanner(cfg) {
+  const numberEl = $("inboundNumber");
+  const numberCopy = $("inboundNumberCopy");
+  const webhookEl = $("inboundWebhook");
+  const webhookCopy = $("inboundWebhookCopy");
+  const hint = $("setupHint");
+  if (!numberEl || !webhookEl) return;
+
+  const number = cfg && cfg.inboundNumber;
+  const url = cfg && cfg.webhookUrl;
+
+  numberEl.textContent = number || "—";
+  numberCopy.hidden = !number;
+  if (number) wireCopy(numberCopy, number);
+
+  webhookEl.textContent = url || tr("Not configured — set PUBLIC_HOSTNAME in .env (use ngrok) and restart.");
+  webhookCopy.hidden = !url;
+  if (url) wireCopy(webhookCopy, url);
+
+  // Hide the hint if we haven't been given a webhook URL (it'd be misleading).
+  if (hint) hint.style.display = url ? "" : "none";
+}
+
+function wireCopy(btn, value) {
+  if (btn._wired === value) return;
+  btn._wired = value;
+  btn.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      btn.classList.add("copied");
+      const original = btn.textContent;
+      btn.textContent = tr("Copied");
+      setTimeout(() => {
+        btn.classList.remove("copied");
+        btn.textContent = original;
+      }, 1500);
+    } catch {
+      showToast(tr("Couldn't copy — your browser blocked clipboard access"), "error");
+    }
+  };
 }
 
 async function saveInboundConfig() {
@@ -129,17 +175,19 @@ function renderInboundList(list) {
     const live = !s.closed;
     const turnsLabel = s.transcriptCount === 1 ? tr("turn") : tr("turns");
     const caller = s.callerNumber || tr("unknown caller");
-    const meta = `${s.transcriptCount} ${turnsLabel}` +
-      (s.outcome ? ` · ${tr("outcome:")} ${tr(s.outcome)}` : "");
+    const dur = s.durationMs ? formatDurationShort(s.durationMs) : null;
+    const meta = [
+      dur,
+      `${s.transcriptCount} ${turnsLabel}`,
+      s.outcome ? `${tr("outcome:")} ${tr(s.outcome)}` : null,
+    ].filter(Boolean).join(" · ");
     row.innerHTML = `
       <span class="when">${timeStr}</span>
-      <div>
+      <div class="who-block">
         <div class="from"></div>
         <div class="meta"></div>
       </div>
       <span class="badge ${live ? "live" : ""}">${tr(live ? "live" : "done")}</span>
-      <span class="meta">${s.scenarioId}</span>
-      <span class="meta">${tr("view →")}</span>
     `;
     row.querySelector(".from").textContent = caller;
     row.querySelector(".meta").textContent = meta;
@@ -148,7 +196,9 @@ function renderInboundList(list) {
   }
 }
 
-function buildEmptyState(noCallsAtAll) {
+function buildEmptyState(_noCallsAtAll) {
+  // The webhook URL + Twilio number now live in the persistent setup banner
+  // above the form, so the empty state can be a simple "nothing here yet".
   const empty = document.createElement("div");
   empty.className = "inbound-empty";
   empty.innerHTML = `
@@ -157,52 +207,6 @@ function buildEmptyState(noCallsAtAll) {
     </svg>
     <p data-i18n>No calls yet — share your number and the assistant will pick up.</p>
   `;
-  // Webhook URL section — only useful when there are zero calls (the user is
-  // probably setting up). When the filter is hiding rows but calls exist, we
-  // skip the webhook UI to avoid noise.
-  if (noCallsAtAll) {
-    const cfg = inboundState.config;
-    const url = cfg && cfg.webhookUrl;
-    if (url) {
-      const label = document.createElement("p");
-      label.setAttribute("data-i18n", "");
-      label.textContent = "Your inbound webhook URL";
-      label.style.marginTop = "6px";
-      empty.appendChild(label);
-
-      const wrap = document.createElement("div");
-      wrap.className = "webhook-display";
-      wrap.innerHTML = `
-        <span class="webhook-url"></span>
-        <button type="button" class="webhook-copy" data-i18n>Copy</button>
-      `;
-      wrap.querySelector(".webhook-url").textContent = url;
-      const copyBtn = wrap.querySelector(".webhook-copy");
-      copyBtn.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        try {
-          await navigator.clipboard.writeText(url);
-          copyBtn.classList.add("copied");
-          const original = copyBtn.textContent;
-          copyBtn.textContent = tr("Copied");
-          setTimeout(() => {
-            copyBtn.classList.remove("copied");
-            copyBtn.textContent = original;
-          }, 1500);
-        } catch {
-          showToast(tr("Couldn't copy — your browser blocked clipboard access"), "error");
-        }
-      });
-      empty.appendChild(wrap);
-    } else {
-      const hint = document.createElement("p");
-      hint.setAttribute("data-i18n", "");
-      hint.textContent = "Set PUBLIC_HOSTNAME in your .env (e.g. via ngrok) to expose your inbound webhook.";
-      hint.style.fontSize = "12px";
-      hint.style.opacity = "0.85";
-      empty.appendChild(hint);
-    }
-  }
   return empty;
 }
 
