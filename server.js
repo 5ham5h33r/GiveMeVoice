@@ -569,7 +569,7 @@ async function gpt(messages) {
 }
 
 async function translateLine(text, lang) {
-  if (!lang || lang === "en") return text;
+  if (!lang || !text) return text;
   const langName = LANGUAGE_NAMES[lang] || lang;
   try {
     return await gpt([
@@ -922,14 +922,14 @@ async function pushTranscript(session, role, text) {
   session.transcript.push(entry);
   broadcastToUI(session, { type: "transcript", ...entry });
 
-  // Fire-and-forget translation into the user's *view* language. Skip when
-  // the call is already being spoken in the view language (avoids round-trip
-  // OpenAI calls that would just echo the same text back).
+  // Fire-and-forget translation into the user's *view* language. Skip only
+  // when the call is already being spoken in the view language (that would be
+  // a round-trip OpenAI call that just echoes the text back).
   const view = session.viewLanguage || session.language;
   const call = session.callLanguage || session.language;
-  if (view && view !== "en" && view !== call) {
+  if (view && view !== call) {
     translateLine(text, view).then((translated) => {
-      if (translated) {
+      if (translated && translated !== text) {
         broadcastToUI(session, {
           type: "transcript-translation",
           at: entry.at,
