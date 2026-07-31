@@ -2,13 +2,19 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org/)
+[![Demo](https://img.shields.io/badge/demo-watch%20a%20real%20call-red)](https://drive.google.com/file/d/1ycTWV5zDU4iZj2_g7Y_bovpN3GTDRUfs/view?usp=sharing)
 
 **Voice-first agent that places and answers real phone calls on behalf of a user**—in the callee’s language for the call, with a **live transcript** and **summary in the user’s language** (e.g. Hindi). Built with **Twilio** (PSTN + Media Streams) and **OpenAI Realtime** (speech-to-speech), plus a small **Express** server and browser UI.
 
 > The phone call is the barrier. GiveMeVoice is the follow-through: dial, negotiate, answer, record, summarize.
 
+## Demo
+
+**[Watch GiveMeVoice place a real phone call](https://drive.google.com/file/d/1ycTWV5zDU4iZj2_g7Y_bovpN3GTDRUfs/view?usp=sharing)** — a full outbound call end to end: the agent dialing and speaking, the live transcript streaming into the UI, and the structured JSON call-outcome summary at hang-up.
+
 ## Table of contents
 
+- [Demo](#demo)
 - [Features](#features)
 - [Stack](#stack)
 - [Requirements](#requirements)
