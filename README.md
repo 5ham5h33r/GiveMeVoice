@@ -214,19 +214,63 @@ Trial behavior (verified numbers, trial message) is documented by Twilio:
 
 ## Architecture
 
-```
-Browser (form + live transcript)
-        │  WSS /ui
-        ▼
-Node (Express + ws)
-  POST /api/call     → Twilio REST outbound call
-  POST /incoming-call→ Twilio webhook for inbound calls
-  POST /twiml        → <Connect><Stream> → WSS /media-stream
-  WSS /media-stream  → audio ↔ OpenAI Realtime (g711_ulaw)
-  POST /call-status  → Twilio status → optional summary job
+```mermaid
+flowchart LR
+    PHONE["Callee's phone<br/>PSTN"]
+    TW["Twilio<br/>Voice + Media Streams"]
+    UI["Browser UI<br/>form, live transcript, outcome"]
+
+    subgraph NODE["Node · Express + ws"]
+        API["POST /api/call<br/>POST /incoming-call"]
+        TWIML["POST /twiml<br/>returns TwiML Connect + Stream"]
+        MEDIA["WSS /media-stream<br/>audio bridge"]
+        STATUS["POST /call-status<br/>triggers summary job"]
+    end
+
+    OAI["OpenAI Realtime<br/>speech-to-speech, g711_ulaw"]
+    CHAT["OpenAI Chat<br/>translation + outcome JSON"]
+
+    UI -->|HTTP| API
+    UI <-->|WSS /ui| MEDIA
+    API -->|REST create call| TW
+    TW -->|webhook| TWIML
+    TWIML -->|Connect Stream| TW
+    TW <-->|base64 frames, 8 kHz mu-law| MEDIA
+    MEDIA <-->|audio + transcript events| OAI
+    TW <-->|voice| PHONE
+    TW -->|status callback| STATUS
+    STATUS --> CHAT
+    CHAT -->|summary| UI
 ```
 
-Audio is **8 kHz μ-law** end-to-end through Realtime; the server forwards base64 media frames and relays transcript events to the browser.
+Audio is **8 kHz μ-law** end to end through Realtime — no transcode on the hot path. The server forwards base64 media frames in both directions and relays transcript events to the browser over a separate socket, so the UI never sits in the audio path.
+
+### Call lifecycle
+
+```mermaid
+sequenceDiagram
+    participant U as Browser
+    participant S as Node server
+    participant T as Twilio
+    participant C as Callee
+    participant O as OpenAI Realtime
+
+    U->>S: POST /api/call (number, scenario)
+    S->>T: REST create call
+    T->>C: rings
+    C-->>T: answers
+    T->>S: POST /twiml
+    S-->>T: Connect + Stream to WSS /media-stream
+    T->>S: WSS open, media frames
+    S->>O: audio frames (g711_ulaw)
+    O-->>S: audio + transcript deltas
+    S-->>T: audio frames
+    S-->>U: transcript over WSS /ui
+    C-->>T: hangs up
+    T->>S: POST /call-status
+    S->>S: summary job → outcome JSON
+    S-->>U: outcome (commitment / partial / refused / unclear)
+```
 
 ## HTTP & WebSocket routes
 
